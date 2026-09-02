@@ -189,7 +189,7 @@ fn path_covered_by_recursive_registration(
 /// - `poll` — always use polling
 /// - `auto` (default) — auto-detect based on filesystem type
 pub fn requires_poll_watcher(path: &Path) -> bool {
-    match std::env::var("ZED_FILE_WATCHER_MODE")
+    match std::env::var("CLAY_FILE_WATCHER_MODE")
         .as_deref()
         .unwrap_or("auto")
     {
@@ -1088,7 +1088,7 @@ fn is_max_files_watch_error(error: &anyhow::Error) -> bool {
 }
 
 static POLL_INTERVAL: LazyLock<Duration> = LazyLock::new(|| {
-    let poll_ms: u64 = std::env::var("ZED_FILE_WATCHER_POLL_MS")
+    let poll_ms: u64 = std::env::var("CLAY_FILE_WATCHER_POLL_MS")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(2000)
@@ -1097,7 +1097,7 @@ static POLL_INTERVAL: LazyLock<Duration> = LazyLock::new(|| {
 });
 
 static NATIVE_WATCH_LIMIT_COOLDOWN: LazyLock<Duration> = LazyLock::new(|| {
-    let cooldown_seconds: u64 = std::env::var("ZED_NATIVE_WATCH_LIMIT_COOLDOWN_SECONDS")
+    let cooldown_seconds: u64 = std::env::var("CLAY_NATIVE_WATCH_LIMIT_COOLDOWN_SECONDS")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5)

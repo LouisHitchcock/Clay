@@ -484,9 +484,9 @@ impl Platform for WindowsPlatform {
             $exePath = $env:ZED_RESTART_EXECUTABLE
             $argumentList = $env:ZED_RESTART_ARGUMENTS
 
-            [Environment]::SetEnvironmentVariable("ZED_RESTART_PID", $null)
-            [Environment]::SetEnvironmentVariable("ZED_RESTART_EXECUTABLE", $null)
-            [Environment]::SetEnvironmentVariable("ZED_RESTART_ARGUMENTS", $null)
+            [Environment]::SetEnvironmentVariable("CLAY_RESTART_PID", $null)
+            [Environment]::SetEnvironmentVariable("CLAY_RESTART_EXECUTABLE", $null)
+            [Environment]::SetEnvironmentVariable("CLAY_RESTART_ARGUMENTS", $null)
 
             while ($true) {
                 $process = Get-Process -Id $pidToWaitFor -ErrorAction SilentlyContinue
@@ -518,9 +518,9 @@ impl Platform for WindowsPlatform {
                 command
                     .arg("-command")
                     .arg(script)
-                    .env("ZED_RESTART_PID", pid.to_string())
-                    .env("ZED_RESTART_EXECUTABLE", app_path)
-                    .env("ZED_RESTART_ARGUMENTS", arguments);
+                    .env("CLAY_RESTART_PID", pid.to_string())
+                    .env("CLAY_RESTART_EXECUTABLE", app_path)
+                    .env("CLAY_RESTART_ARGUMENTS", arguments);
                 #[allow(
                     clippy::disallowed_methods,
                     reason = "We are restarting ourselves, using std command thus is fine"

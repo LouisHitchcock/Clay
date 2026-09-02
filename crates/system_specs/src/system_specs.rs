@@ -291,7 +291,7 @@ fn read_pci_id_from_path(path: impl AsRef<std::path::Path>) -> anyhow::Result<u1
 /// The runtime value is used by snap since the Zed snaps use release binaries directly, and so
 /// cannot have this baked in.
 fn bundle_type() -> Option<String> {
-    option_env!("ZED_BUNDLE_TYPE")
+    option_env!("CLAY_BUNDLE_TYPE")
         .map(|bundle_type| bundle_type.to_string())
-        .or_else(|| env::var("ZED_BUNDLE_TYPE").ok())
+        .or_else(|| env::var("CLAY_BUNDLE_TYPE").ok())
 }

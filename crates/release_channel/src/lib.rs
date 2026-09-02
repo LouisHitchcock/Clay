@@ -12,7 +12,7 @@ const ZED_DOCS_URL: &str = "https://zed.dev/docs";
 /// stable | dev | nightly | preview
 pub static RELEASE_CHANNEL_NAME: LazyLock<String> = LazyLock::new(|| {
     if cfg!(debug_assertions) {
-        env::var("ZED_RELEASE_CHANNEL").unwrap_or_else(|_| compile_time_release_channel_name())
+        env::var("CLAY_RELEASE_CHANNEL").unwrap_or_else(|_| compile_time_release_channel_name())
     } else {
         compile_time_release_channel_name()
     }
@@ -25,7 +25,7 @@ pub static RELEASE_CHANNEL_NAME: LazyLock<String> = LazyLock::new(|| {
 /// The build script checks for `$ZED_RELEASE_CHANNEL` and emits the `cfg`
 #[cfg(__do_not_set_zed_release_channel)]
 fn compile_time_release_channel_name() -> String {
-    env!("ZED_RELEASE_CHANNEL").trim().to_string()
+    env!("CLAY_RELEASE_CHANNEL").trim().to_string()
 }
 
 #[cfg(not(__do_not_set_zed_release_channel))]
@@ -44,10 +44,10 @@ pub static RELEASE_CHANNEL: LazyLock<ReleaseChannel> =
 #[cfg(target_os = "windows")]
 pub fn app_identifier() -> &'static str {
     match *RELEASE_CHANNEL {
-        ReleaseChannel::Dev => "Zed-Editor-Dev",
-        ReleaseChannel::Nightly => "Zed-Editor-Nightly",
-        ReleaseChannel::Preview => "Zed-Editor-Preview",
-        ReleaseChannel::Stable => "Zed-Editor-Stable",
+        ReleaseChannel::Dev => "Clay-Editor-Dev",
+        ReleaseChannel::Nightly => "Clay-Editor-Nightly",
+        ReleaseChannel::Preview => "Clay-Editor-Preview",
+        ReleaseChannel::Stable => "Clay-Editor-Stable",
     }
 }
 
@@ -101,7 +101,7 @@ impl AppVersion {
         build_id: Option<&str>,
         commit_sha: Option<AppCommitSha>,
     ) -> Version {
-        let mut version: Version = if let Ok(from_env) = env::var("ZED_APP_VERSION") {
+        let mut version: Version = if let Ok(from_env) = env::var("CLAY_APP_VERSION") {
             from_env.parse().expect("invalid ZED_APP_VERSION")
         } else {
             pkg_version.parse().expect("invalid version in Cargo.toml")
@@ -205,10 +205,10 @@ impl ReleaseChannel {
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "Zed Dev",
-            ReleaseChannel::Nightly => "Zed Nightly",
-            ReleaseChannel::Preview => "Zed Preview",
-            ReleaseChannel::Stable => "Zed",
+            ReleaseChannel::Dev => "Clay Dev",
+            ReleaseChannel::Nightly => "Clay Nightly",
+            ReleaseChannel::Preview => "Clay Preview",
+            ReleaseChannel::Stable => "Clay",
         }
     }
 
@@ -227,10 +227,10 @@ impl ReleaseChannel {
     /// This also has to match the bundle identifier for Zed on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "dev.zed.Zed-Dev",
-            ReleaseChannel::Nightly => "dev.zed.Zed-Nightly",
-            ReleaseChannel::Preview => "dev.zed.Zed-Preview",
-            ReleaseChannel::Stable => "dev.zed.Zed",
+            ReleaseChannel::Dev => "io.github.louishitchcock.Clay-Dev",
+            ReleaseChannel::Nightly => "io.github.louishitchcock.Clay-Nightly",
+            ReleaseChannel::Preview => "io.github.louishitchcock.Clay-Preview",
+            ReleaseChannel::Stable => "io.github.louishitchcock.Clay",
         }
     }
 

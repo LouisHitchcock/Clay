@@ -86,7 +86,7 @@ mod imp {
     }
 
     fn run() -> Result<()> {
-        let require_enforced = env_flag("ZED_TEST_SANDBOX_REQUIRE_ENFORCED");
+        let require_enforced = env_flag("CLAY_TEST_SANDBOX_REQUIRE_ENFORCED");
         let wsl = Wsl::detect();
         println!("{RESULT_TAG} starting (require_enforced={require_enforced})");
 
@@ -119,7 +119,7 @@ mod imp {
     fn not_enforced(require_enforced: bool, reason: &str) -> Result<()> {
         if require_enforced {
             bail!(
-                "ZED_TEST_SANDBOX_REQUIRE_ENFORCED is set, but the WSL sandbox could not be \
+                "CLAY_TEST_SANDBOX_REQUIRE_ENFORCED is set, but the WSL sandbox could not be \
                  enforced: {reason}"
             );
         }
@@ -438,7 +438,7 @@ mod imp {
     /// WSL's own.
     fn check_env_forwarding(checks: &mut Checks) -> Result<()> {
         let mut env = HashMap::new();
-        env.insert("ZED_TEST_FORWARDED".to_string(), "yes".to_string());
+        env.insert("CLAY_TEST_FORWARDED".to_string(), "yes".to_string());
         // If PATH were forwarded it would replace WSL's PATH with this bogus
         // value; it must not be.
         env.insert(
@@ -567,7 +567,7 @@ mod imp {
     /// WSL can use to reach the Windows host. Returns `None` (so the caller
     /// skips, rather than fails, the network checks) when nothing is reachable.
     fn discover_peer(wsl: &Wsl) -> Result<Option<String>> {
-        if let Some(address) = std::env::var("ZED_TEST_ECHO_ADDR")
+        if let Some(address) = std::env::var("CLAY_TEST_ECHO_ADDR")
             .ok()
             .filter(|address| !address.is_empty())
         {
@@ -630,10 +630,10 @@ mod imp {
     fn ensure_host_port(address: &str) -> Result<()> {
         let (host, port) = address
             .rsplit_once(':')
-            .with_context(|| format!("ZED_TEST_ECHO_ADDR must be host:port, got {address:?}"))?;
+            .with_context(|| format!("CLAY_TEST_ECHO_ADDR must be host:port, got {address:?}"))?;
         ensure!(
             !host.is_empty() && port.parse::<u16>().is_ok(),
-            "ZED_TEST_ECHO_ADDR must be host:port, got {address:?}"
+            "CLAY_TEST_ECHO_ADDR must be host:port, got {address:?}"
         );
         Ok(())
     }

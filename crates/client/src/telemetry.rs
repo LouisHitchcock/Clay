@@ -80,24 +80,24 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(not(debug_assertions))]
 const FLUSH_INTERVAL: Duration = Duration::from_secs(60 * 5);
 static ZED_CLIENT_CHECKSUM_SEED: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
-    option_env!("ZED_CLIENT_CHECKSUM_SEED")
+    option_env!("CLAY_CLIENT_CHECKSUM_SEED")
         .map(|s| s.as_bytes().into())
         .or_else(|| {
-            env::var("ZED_CLIENT_CHECKSUM_SEED")
+            env::var("CLAY_CLIENT_CHECKSUM_SEED")
                 .ok()
                 .map(|s| s.as_bytes().into())
         })
 });
 
 pub static MINIDUMP_ENDPOINT: LazyLock<Option<String>> = LazyLock::new(|| {
-    option_env!("ZED_MINIDUMP_ENDPOINT")
+    option_env!("CLAY_MINIDUMP_ENDPOINT")
         .map(str::to_string)
-        .or_else(|| env::var("ZED_MINIDUMP_ENDPOINT").ok())
+        .or_else(|| env::var("CLAY_MINIDUMP_ENDPOINT").ok())
 });
 
 pub fn should_install_crash_handler(channel: ReleaseChannel) -> bool {
     matches!(
-        env::var("ZED_GENERATE_MINIDUMPS").as_deref(),
+        env::var("CLAY_GENERATE_MINIDUMPS").as_deref(),
         Ok("true" | "1")
     ) || (channel != ReleaseChannel::Dev && MINIDUMP_ENDPOINT.is_some())
 }

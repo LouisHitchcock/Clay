@@ -1072,7 +1072,7 @@ mod tests {
             ..TaskTemplate::default()
         };
 
-        assert_eq!(task.unknown_variables(), vec!["ZED_UNKNOWN".to_string()]);
+        assert_eq!(task.unknown_variables(), vec!["CLAY_UNKNOWN".to_string()]);
 
         // Variable names starting with `ZED_CUSTOM_` should never be reported,
         // as those are dynamically provided by extensions.
@@ -1096,7 +1096,7 @@ mod tests {
             ..TaskTemplate::default()
         };
 
-        assert_eq!(task.unknown_variables(), vec!["ZED_UNKNOWN".to_string()]);
+        assert_eq!(task.unknown_variables(), vec!["CLAY_UNKNOWN".to_string()]);
 
         // Valid variable names are not reported.
         let label = "test custom variables".to_string();

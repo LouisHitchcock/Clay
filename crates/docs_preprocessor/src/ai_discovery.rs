@@ -538,7 +538,7 @@ mod tests {
         assert!(mcp_markdown.starts_with(
             "> For the complete documentation index and Markdown links, see [llms.txt](/docs/llms.txt).\n\n# MCP"
         ));
-        assert!(!mcp_markdown.contains("ZED_META"));
+        assert!(!mcp_markdown.contains("CLAY_META"));
 
         let index_markdown = std::fs::read_to_string(destination.join("index.md"))?;
         assert!(index_markdown.contains("# Getting Started"));

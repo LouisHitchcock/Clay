@@ -20,7 +20,7 @@ use release_channel::ReleaseChannel;
 /// Only works in development. Setting this environment variable in other
 /// release channels is a no-op.
 static ZED_DEVELOPMENT_USE_KEYCHAIN: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("ZED_DEVELOPMENT_USE_KEYCHAIN").is_ok_and(|value| !value.is_empty())
+    std::env::var("CLAY_DEVELOPMENT_USE_KEYCHAIN").is_ok_and(|value| !value.is_empty())
 });
 
 pub struct ZedCredentialsProvider(pub Arc<dyn CredentialsProvider>);

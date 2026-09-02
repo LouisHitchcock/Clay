@@ -18,7 +18,7 @@ pub use settings::{FeatureFlagsSettings, generate_feature_flags_schema};
 pub use store::*;
 
 pub static ZED_DISABLE_STAFF: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("ZED_DISABLE_STAFF").is_ok_and(|value| !value.is_empty() && value != "0")
+    std::env::var("CLAY_DISABLE_STAFF").is_ok_and(|value| !value.is_empty() && value != "0")
 });
 
 impl Global for FeatureFlagStore {}
