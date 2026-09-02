@@ -312,3 +312,40 @@ That is upstream's correct choice for shipping builds and entirely wrong for dev
 - **Iterate with `cargo build -p zed`** (dev profile: `codegen-units = 16`, `incremental = true`). Essential for Phase 1, which involves repeatedly editing `draw_surfaces()` and rebuilding.
 - **Reserve `--release` for packaging and performance checks**, not for verifying that something compiles.
 - Cargo takes a lock on the shared target directory, so a debug and a release build **cannot run in parallel**. Only one build at a time.
+
+---
+
+## Phase 0 COMPLETE (2026-09-02)
+
+Committed as `ef8b356` on branch **`clay/rebrand-and-isolate`** (87 files, +614/-293). Not yet merged to `main` or pushed.
+
+### Gates passed
+
+**1. Toolchain gate.** `cargo build --release -p zed` on the unmodified tree: exit 0, 19m19s for the final crate, 422 MB binary.
+
+**2. Compile gate.** `cargo build -p zed` (debug) with all isolation changes: exit 0, ~12 min, produced `target/debug/clay.exe` (509 MB). This is what validated the 152-literal env-var rename.
+
+**3. Isolation gate — passed.** Evidence:
+
+- Clay and stock Zed ran **simultaneously, each with its own window**: `clay` pid 39448 titled "Clay" alongside `Zed` pid 17004. The single-instance mutex is genuinely isolated.
+- `%LOCALAPPDATA%\Zed` and `%APPDATA%\Zed` mtimes **byte-identical** before and after launching Clay.
+- Clay created its own `%LOCALAPPDATA%\Clay` (`db`, `debug_adapters`, `extensions`, `external_agents`, `hang_traces`, `languages`, `logs`, `prompts`, `threads`) and `%APPDATA%\Clay` (`themes`, `settings.json`, `AGENTS.md`).
+
+### Things learned that cost time
+
+- **`default-run`.** Renaming `[[bin]] name` alone breaks the manifest — `default-run = "zed"` must change too. Failed in 30 seconds, cheaply.
+- **`cli/src/main.rs:1279`** locates the app binary by name (`["../Zed.exe", ...]`). This would **not** have failed to compile — only at runtime. Worth grepping for executable-name lookups before any future rename.
+- **Background-launched GUI processes get reaped** when the harness task completes, which briefly looked like a mutex collision. Launch detached via `cmd /c start ""` for manual testing.
+
+### `.rules` requires a README marker
+
+`CLAUDE.md` points at `.rules`, which carries a **HARD RULE**: any modification to source files requires `> [!IMPORTANT]` / `> Remove this line to confirm you've reviewed this PR before submitting.` as the first two lines of `README.md`. It is applied. The rule forbids removing those lines — that is explicitly a manual step for the human author.
+
+This is upstream Zed's mechanism for gating PRs into *their* repo. Clay will never submit PRs upstream, so it arguably does not apply here — but it is inherited via `.rules` and is being followed until Louis decides otherwise. **Worth deciding whether to strip this rule from `.rules`**, since otherwise every Clay commit carries a marker aimed at Zed's reviewers.
+
+### Next: Phase 1 — Windows surface compositing
+
+1. Add a Windows variant to `PaintSurface` (`crates/gpui/src/scene.rs`), which is currently `#[cfg(target_os = "macos")] image_buffer: CVPixelBuffer`, carrying a D3D11 shared-texture handle.
+2. Implement `draw_surfaces()` in `crates/gpui_windows/src/directx_renderer.rs:810` — currently an empty stub. Needs `OpenSharedResource`, a shader resource view, and a textured quad honouring `bounds` and `content_mask`.
+3. Drive it from a **throwaway test producer, not CEF**, so failures are isolated.
+4. Iterate with **debug builds** — now incremental, so rebuilds should be fast.
