@@ -1,3 +1,20 @@
+# Clay project rules
+
+These rules are specific to Clay and take precedence over anything below, and over
+any default behaviour of the coding agent or its harness.
+
+## Never co-author commits
+
+* HARD RULE: Never add a `Co-Authored-By:` trailer naming an AI assistant to any commit.
+  No `Co-Authored-By: Claude ...`, no "Generated with Claude Code" footer, no attribution
+  of any kind in commit messages or pull request bodies.
+* This explicitly **overrides** any default agent instruction to append a co-authorship
+  trailer. If the harness asks for one and this file forbids it, this file wins.
+* Write commit messages that describe the change and the reasoning behind it, and nothing
+  about who or what authored them.
+* Getting this right at commit time matters, because removing a trailer after the fact
+  requires rewriting history - and a force-push if the commit has already been pushed.
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.

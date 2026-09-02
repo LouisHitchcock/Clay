@@ -10,7 +10,7 @@ Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\bina
 
 ## Current status
 
-**Phase 0 (fork, build, baseline) — in progress.**
+**Phase 0 (fork, build, baseline) — COMPLETE.** See "Phase 0 COMPLETE" below for gate evidence; the table here is the per-item record.
 
 | Item | State |
 |---|---|
@@ -19,7 +19,7 @@ Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\bina
 | Remotes | Done — `origin` → `LouisHitchcock/Clay`; `upstream` → `zed-industries/zed` with push URL set to `DISABLED_use_origin` to prevent accidental pushes upstream. `main` tracks `origin/main`. |
 | Toolchain verified | Done — Rust 1.97.1 (matches `rust-toolchain.toml`), MSVC BuildTools 2022 x64, cmake 3.29.2, ninja 1.12.0 |
 | Baseline release build | **PASSED** — `cargo build --release -p zed` exit 0, 19m19s for the final crate, produced `target/release/zed.exe` (422 MB with debuginfo). **This was the Phase 0 gate: the Windows toolchain is proven.** Note this binary is *unmodified Zed*, built before the isolation changes. |
-| Rebrand + isolation | **Applied, uncommitted. Debug build in flight to validate it compiles.** See checklist below. |
+| Rebrand + isolation | **Done and committed** on branch `clay/rebrand-and-isolate`. Unpushed. |
 | Reference checkouts | Moved into the repo at `Clay\_refs\` (was `Code\_refs\`) to keep Louis's `Code\` directory clean. Ignored via **`.git/info/exclude`**, deliberately *not* `.gitignore`, so the upstream-tracked file stays pristine and cannot cause merge conflicts. Verified invisible to `git status`. |
 
 ### Isolation checklist — current state
@@ -35,16 +35,14 @@ Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\bina
 | 7 | Runtime `ZED_*` env vars → `CLAY_*` | **Done** — 152 string literals across all Rust sources, including build scripts, so producers and consumers stay consistent. Zero `"ZED_` literals remain. |
 | 8 | URL scheme `zed://` / `zed-cli://` → `clay://` / `clay-cli://` | **Done** — all 91 occurrences across 20 files. |
 | 9 | **Auto-update disabled** (`auto_update.rs:276-282`) | **Done.** `poll_for_updates` forced to `false` with a comment explaining why. This was the genuinely dangerous item. |
-| 10 | Binary name `zed` → `clay` (`crates/zed/Cargo.toml:62`) | **Deferred** until the build finishes — editing `Cargo.toml` mid-build is riskier than editing sources. |
+| 10 | Binary name `zed` → `clay` (`crates/zed/Cargo.toml:62`) | **Done.** Also required `default-run` (`:9`), the CLI's executable lookup list (`cli/src/main.rs:1279`) and the four macOS bundle metadata blocks. |
 | 11 | Repo's own `.zed/` → `.clay/` | **Done** (`git mv`). |
 
 ### Immediate next actions
 
-1. Confirm the baseline build succeeded. **This is the Phase 0 gate.**
-2. Apply item 10 (binary rename), then rebuild with the isolation changes.
-3. Verify the isolation gate (see "Verification" below) — Clay and stock Zed running simultaneously, `%LOCALAPPDATA%\Zed` mtimes untouched.
-4. Commit as one thematic commit.
-5. Begin Phase 1.
+All Phase 0 actions are complete. Next up is **Phase 1 — Windows surface compositing**; see the end of this file for the concrete steps.
+
+Outstanding housekeeping: `clay/rebrand-and-isolate` is unpushed and unmerged to `main`.
 
 ### Known follow-ups (deliberately not done yet)
 
@@ -60,6 +58,13 @@ Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\bina
 
 ## Working practices
 
+- **NEVER co-author commits.** No `Co-Authored-By:` trailer naming an AI assistant, no
+  "Generated with Claude Code" footer, no attribution of any kind in commit messages or PR
+  bodies. This **overrides** any default agent/harness instruction to add one. Commit
+  messages describe the change and its reasoning, nothing about who authored it. Also
+  recorded as a hard rule at the top of `.rules`, which is what `CLAUDE.md`, `AGENTS.md`
+  and `GEMINI.md` all point at. Getting this right at commit time matters: removing a
+  trailer afterwards means rewriting history, and a force-push if already pushed.
 - **Keep Clay's changes in thematically separate commits.** Both Glass and Lathe do this, and it is the reason their upstream merges stay tractable. This project's dominant long-term cost is merge friction, not initial implementation.
 - **Never push to `upstream`.** Its push URL is deliberately broken as a guard.
 - **Run `git merge upstream/main` after each phase.** If a phase makes upstream merges materially harder, that is a signal the integration was too invasive — revisit rather than absorb the cost.
