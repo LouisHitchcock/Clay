@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    ops::Range,
     slice,
     sync::{Arc, OnceLock},
 };
@@ -7,7 +9,7 @@ use anyhow::{Context, Result};
 use gpui_util::ResultExt;
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HANDLE, HWND},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
@@ -48,6 +50,15 @@ pub(crate) struct DirectXRenderer {
 
     width: u32,
     height: u32,
+
+    /// Shader resource views for textures shared in from other devices, keyed by the
+    /// DXGI shared handle they were opened from.
+    ///
+    /// Opening a shared resource is expensive enough that doing it per frame is not
+    /// viable for a browser surface repainting continuously, so views are cached for
+    /// the lifetime of the device. Cleared on device loss, because both the views and
+    /// the textures behind them belong to the device that has gone away.
+    shared_textures: HashMap<isize, ID3D11ShaderResourceView>,
 
     /// Whether we want to skip drwaing due to device lost events.
     ///
@@ -92,6 +103,7 @@ struct DirectXRenderPipelines {
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
+    surface_pipeline: PipelineState<SurfaceSprite>,
 }
 
 struct DirectXGlobalElements {
@@ -193,6 +205,7 @@ impl DirectXRenderer {
             font_info: Self::get_font_info(),
             width: 1,
             height: 1,
+            shared_textures: HashMap::default(),
             skip_draws: false,
         })
     }
@@ -323,6 +336,7 @@ impl DirectXRenderer {
         self.globals = globals;
         self.pipelines = pipelines;
         self.direct_composition = direct_composition;
+        self.shared_textures.clear();
         self.skip_draws = true;
         Ok(())
     }
@@ -384,7 +398,7 @@ impl DirectXRenderer {
                 PrimitiveBatch::PolychromeSprites { texture_id, range } => {
                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
                 }
-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
+                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(scene, range),
             }
             .with_context(|| {
                 format!(
@@ -574,6 +588,22 @@ impl DirectXRenderer {
                 &devices.device,
                 &devices.device_context,
                 &scene.polychrome_sprites,
+            )?;
+        }
+
+        if !scene.surfaces.is_empty() {
+            let sprites = scene
+                .surfaces
+                .iter()
+                .map(|surface| SurfaceSprite {
+                    bounds: surface.bounds,
+                    content_mask: surface.content_mask,
+                })
+                .collect::<Vec<_>>();
+            self.pipelines.surface_pipeline.update_buffer(
+                &devices.device,
+                &devices.device_context,
+                &sprites,
             )?;
         }
 
@@ -807,11 +837,86 @@ impl DirectXRenderer {
         )
     }
 
-    fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
-        if surfaces.is_empty() {
+    fn draw_surfaces(&mut self, scene: &Scene, range: Range<usize>) -> Result<()> {
+        if range.is_empty() {
             return Ok(());
         }
+        let devices = self.devices.as_ref().context("devices missing")?.clone();
+        let batch_params_buffer = self
+            .globals
+            .batch_params_buffer
+            .clone()
+            .context("batch params buffer missing")?;
+        let sampler = self.globals.sampler.clone();
+
+        // A batch may mix surfaces from different textures, and a draw call can only bind
+        // one. Split the batch into maximal runs that share a handle and issue one
+        // instanced draw per run, so the common case of a single surface stays one call.
+        let mut run_start = range.start;
+        while run_start < range.end {
+            let handle = scene.surfaces[run_start].texture.handle;
+            let mut run_end = run_start + 1;
+            while run_end < range.end && scene.surfaces[run_end].texture.handle == handle {
+                run_end += 1;
+            }
+
+            let texture_view = self.shared_texture_view(&devices.device, handle)?;
+            self.pipelines.surface_pipeline.draw_range_with_texture(
+                &devices.device_context,
+                slice::from_ref(&texture_view),
+                &batch_params_buffer,
+                slice::from_ref(&sampler),
+                run_start as u32,
+                (run_end - run_start) as u32,
+            )?;
+
+            run_start = run_end;
+        }
         Ok(())
+    }
+
+    /// Open a texture shared in from another device and cache a view of it.
+    fn shared_texture_view(
+        &mut self,
+        device: &ID3D11Device,
+        handle: isize,
+    ) -> Result<Option<ID3D11ShaderResourceView>> {
+        if let Some(view) = self.shared_textures.get(&handle) {
+            return Ok(Some(view.clone()));
+        }
+
+        // Producers such as CEF hand over an NT handle from `CreateSharedHandle`, which
+        // must be opened with `OpenSharedResource1`; the older `OpenSharedResource` only
+        // accepts legacy shared handles.
+        let device1: ID3D11Device1 = device
+            .cast()
+            .context("querying ID3D11Device1 to open a shared texture")?;
+        let texture: ID3D11Texture2D =
+            unsafe { device1.OpenSharedResource1(HANDLE(handle as *mut _)) }
+                .context("opening a shared texture handle")?;
+
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut desc) };
+
+        let view_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+            Format: desc.Format,
+            ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_SRV {
+                    MostDetailedMip: 0,
+                    MipLevels: 1,
+                },
+            },
+        };
+        let mut view = None;
+        unsafe {
+            device
+                .CreateShaderResourceView(&texture, Some(&view_desc), Some(&mut view))
+                .context("creating a shader resource view for a shared texture")?;
+        }
+        let view = view.context("shader resource view was not created")?;
+        self.shared_textures.insert(handle, view.clone());
+        Ok(Some(view))
     }
 
     pub(crate) fn gpu_specs(&self) -> Result<GpuSpecs> {
@@ -992,6 +1097,14 @@ impl DirectXRenderPipelines {
             create_blend_state(device)?,
         )?;
 
+        let surface_pipeline = PipelineState::new(
+            device,
+            "surface_pipeline",
+            ShaderModule::Surface,
+            4,
+            create_blend_state(device)?,
+        )?;
+
         Ok(Self {
             shadow_pipeline,
             quad_pipeline,
@@ -1001,6 +1114,7 @@ impl DirectXRenderPipelines {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
+            surface_pipeline,
         })
     }
 }
@@ -1273,6 +1387,17 @@ struct PathRasterizationSprite {
 #[repr(C)]
 struct PathSprite {
     bounds: Bounds<ScaledPixels>,
+}
+
+/// The GPU-facing half of a `PaintSurface`.
+///
+/// `PaintSurface` also carries a shared texture handle, which cannot live in a
+/// structured buffer, so the geometry is uploaded separately from the texture.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct SurfaceSprite {
+    bounds: Bounds<ScaledPixels>,
+    content_mask: ContentMask<ScaledPixels>,
 }
 
 impl Drop for DirectXRenderer {
@@ -1710,6 +1835,7 @@ pub(crate) mod shader_resources {
         MonochromeSprite,
         SubpixelSprite,
         PolychromeSprite,
+        Surface,
         EmojiRasterization,
     }
 
@@ -1783,6 +1909,10 @@ pub(crate) mod shader_resources {
                 ShaderModule::PolychromeSprite => match target {
                     ShaderTarget::Vertex => POLYCHROME_SPRITE_VERTEX_BYTES,
                     ShaderTarget::Fragment => POLYCHROME_SPRITE_FRAGMENT_BYTES,
+                },
+                ShaderModule::Surface => match target {
+                    ShaderTarget::Vertex => SURFACE_VERTEX_BYTES,
+                    ShaderTarget::Fragment => SURFACE_FRAGMENT_BYTES,
                 },
                 ShaderModule::EmojiRasterization => match target {
                     ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
@@ -1874,6 +2004,7 @@ pub(crate) mod shader_resources {
                 ShaderModule::MonochromeSprite => "monochrome_sprite",
                 ShaderModule::SubpixelSprite => "subpixel_sprite",
                 ShaderModule::PolychromeSprite => "polychrome_sprite",
+                ShaderModule::Surface => "surface",
                 ShaderModule::EmojiRasterization => "emoji_rasterization",
             }
         }

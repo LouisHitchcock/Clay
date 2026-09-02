@@ -763,6 +763,24 @@ impl From<PolychromeSprite> for Primitive {
     }
 }
 
+/// A GPU texture owned by another process or device, shared into this one.
+///
+/// The handle is a DXGI shared-resource handle, as produced by
+/// `IDXGIResource1::CreateSharedHandle`. It is stored as an `isize` rather than a
+/// `windows::Win32::Foundation::HANDLE` so that `Scene` stays `Send`: the windows
+/// crate's `HANDLE` wraps a raw pointer and so is neither `Send` nor `Sync`.
+///
+/// The handle is borrowed, not owned. Whoever produced the texture is responsible for
+/// keeping it alive for as long as it may appear in a scene, and for closing it.
+#[cfg(target_os = "windows")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SharedTexture {
+    /// A DXGI shared-resource handle, valid in this process.
+    pub handle: isize,
+    /// The texture's pixel dimensions, needed to lay out the quad it is drawn onto.
+    pub size: Size<crate::DevicePixels>,
+}
+
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct PaintSurface {
@@ -771,6 +789,8 @@ pub struct PaintSurface {
     pub content_mask: ContentMask<ScaledPixels>,
     #[cfg(target_os = "macos")]
     pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+    #[cfg(target_os = "windows")]
+    pub texture: SharedTexture,
 }
 
 impl From<PaintSurface> for Primitive {

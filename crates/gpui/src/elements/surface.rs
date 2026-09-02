@@ -2,6 +2,8 @@ use crate::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
     ObjectFit, Pixels, Style, StyleRefinement, Styled, Window,
 };
+#[cfg(target_os = "windows")]
+use crate::SharedTexture;
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::CVPixelBuffer;
 use refineable::Refineable;
@@ -12,6 +14,16 @@ pub enum SurfaceSource {
     /// A macOS image buffer from CoreVideo
     #[cfg(target_os = "macos")]
     Surface(CVPixelBuffer),
+    /// A GPU texture shared into this process from another device, via a DXGI shared handle
+    #[cfg(target_os = "windows")]
+    SharedTexture(SharedTexture),
+}
+
+#[cfg(target_os = "windows")]
+impl From<SharedTexture> for SurfaceSource {
+    fn from(value: SharedTexture) -> Self {
+        SurfaceSource::SharedTexture(value)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -29,7 +41,7 @@ pub struct Surface {
 }
 
 /// Create a new surface element.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn surface(source: impl Into<SurfaceSource>) -> Surface {
     Surface {
         source: source.into(),
@@ -86,10 +98,18 @@ impl Element for Surface {
         &mut self,
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] bounds: Bounds<Pixels>,
+        #[cfg_attr(
+            not(any(target_os = "macos", target_os = "windows")),
+            allow(unused_variables)
+        )]
+        bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] window: &mut Window,
+        #[cfg_attr(
+            not(any(target_os = "macos", target_os = "windows")),
+            allow(unused_variables)
+        )]
+        window: &mut Window,
         _: &mut App,
     ) {
         match &self.source {
@@ -99,6 +119,12 @@ impl Element for Surface {
                 let new_bounds = self.object_fit.get_bounds(bounds, size);
                 // TODO: Add support for corner_radii
                 window.paint_surface(new_bounds, surface.clone());
+            }
+            #[cfg(target_os = "windows")]
+            SurfaceSource::SharedTexture(texture) => {
+                let size = crate::size(texture.size.width.into(), texture.size.height.into());
+                let new_bounds = self.object_fit.get_bounds(bounds, size);
+                window.paint_surface(new_bounds, *texture);
             }
             #[allow(unreachable_patterns)]
             _ => {}

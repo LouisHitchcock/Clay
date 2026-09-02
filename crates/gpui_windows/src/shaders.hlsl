@@ -1266,3 +1266,44 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     color.a *= sprite.opacity * saturate(0.5 - distance);
     return color;
 }
+
+/*
+**
+**              Surfaces
+**
+*/
+
+struct Surface {
+    Bounds bounds;
+    Bounds content_mask;
+};
+
+struct SurfaceVertexOutput {
+    float4 position: SV_Position;
+    float2 texture_coords: TEXCOORD0;
+    float4 clip_distance: SV_ClipDistance;
+};
+
+struct SurfaceFragmentInput {
+    float4 position: SV_Position;
+    float2 texture_coords: TEXCOORD0;
+};
+
+StructuredBuffer<Surface> surfaces: register(t1);
+
+SurfaceVertexOutput surface_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
+    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+    Surface surface = surfaces[batch_start_index + instance_id];
+
+    // The whole texture is stretched over the quad, so the unit vertex doubles as the
+    // texture coordinate. Fitting the texture to the bounds is the element's job.
+    SurfaceVertexOutput output;
+    output.position = to_device_position(unit_vertex, surface.bounds);
+    output.texture_coords = unit_vertex;
+    output.clip_distance = distance_from_clip_rect(unit_vertex, surface.bounds, surface.content_mask);
+    return output;
+}
+
+float4 surface_fragment(SurfaceFragmentInput input): SV_Target {
+    return t_sprite.Sample(s_sprite, input.texture_coords);
+}

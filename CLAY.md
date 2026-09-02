@@ -354,3 +354,126 @@ This is upstream Zed's mechanism for gating PRs into *their* repo. Clay will nev
 2. Implement `draw_surfaces()` in `crates/gpui_windows/src/directx_renderer.rs:810` — currently an empty stub. Needs `OpenSharedResource`, a shader resource view, and a textured quad honouring `bounds` and `content_mask`.
 3. Drive it from a **throwaway test producer, not CEF**, so failures are isolated.
 4. Iterate with **debug builds** — now incremental, so rebuilds should be fast.
+
+---
+
+## Phase 1 COMPLETE - gate passed 2026-09-02
+
+**The gate passed.** An animating texture, produced on a separate D3D11 device and shared
+into the process by NT handle, renders inside a GPUI element - correctly clipped by
+`content_mask` and correctly z-ordered beneath overlapping GPUI content. Verified by
+screenshot and confirmed on screen by Louis.
+
+Evidence:
+
+- `cargo check -p gpui` and `cargo check -p gpui_windows` both clean, zero warnings. Every
+  substitution type-checked first time, including the `HANDLE` cast, the SRV union
+  initialiser, and the borrow of `self.pipelines` after the `&mut self` cache lookup.
+- Both new shader entry points compile under `fxc.exe` (`vs_4_1` / `ps_4_1`) - the same
+  compiler and targets `build.rs` uses for release.
+- `cargo build -p zed` clean; Clay launches and renders normally with no visual regression.
+  Its log confirms the DirectX path: *"Using GPU: NVIDIA GeForce RTX 4060"*, *"Created device
+  with Direct3D 11.1 feature level"*, *"Rendered first frame"*.
+- The `surface` example runs. A pixel sampled inside the gradient walks
+  `28,163,92 -> 28,183,72 -> 28,203,52` over 1.4s, proving the shared texture is re-read
+  every frame rather than frozen on the first.
+
+**This retires the project's largest risk.** The WebView2 fallback is no longer needed: CEF's
+`on_accelerated_paint` hands over exactly the kind of shared D3D11 handle this path now
+consumes.
+
+### What was written
+
+**`crates/gpui/src/scene.rs`** - new `SharedTexture { handle: isize, size: Size<DevicePixels> }`,
+plus a `#[cfg(target_os = "windows")] pub texture: SharedTexture` field on `PaintSurface`.
+The handle is an `isize`, not a `windows::Win32::Foundation::HANDLE`, because that type wraps
+a raw pointer and is neither `Send` nor `Sync` - using it would have made `Scene` non-`Send`.
+The handle is borrowed, not owned: the producer keeps the texture alive and closes the handle.
+
+**`crates/gpui/src/window.rs`** - a `#[cfg(target_os = "windows")] paint_surface(bounds, texture)`
+mirroring the macOS one.
+
+**`crates/gpui/src/elements/surface.rs`** - `SurfaceSource::SharedTexture` variant, a `From`
+impl, `surface()` now gated on `any(macos, windows)` rather than macos alone, and a paint arm
+that fits the texture to the bounds via `object_fit`.
+
+**`crates/gpui_windows/src/shaders.hlsl`** - a new `Surface` struct plus `surface_vertex` /
+`surface_fragment`. Modelled on `path_sprite` but, unlike it, applies the content mask via
+`distance_from_clip_rect` into `SV_ClipDistance`, following the `quad` convention. The unit
+vertex doubles as the texture coordinate, so the texture stretches over the quad and fitting
+is the element's job.
+
+**`crates/gpui_windows/src/directx_renderer.rs`** - 14 substitutions:
+
+- `SurfaceSprite { bounds, content_mask }`, the GPU-facing half of `PaintSurface`. Needed
+  because a texture handle cannot live in a structured buffer, so geometry and texture are
+  uploaded separately. Same pattern as the existing `PathSprite`.
+- `surface_pipeline: PipelineState<SurfaceSprite>` with the standard blend state.
+- `shared_textures: HashMap<isize, ID3D11ShaderResourceView>` on the renderer, cleared in
+  `handle_device_lost_impl`. Opening a shared resource per frame is not viable for a browser
+  repainting continuously, and both the views and their textures die with the device.
+- `upload_scene_buffers` now uploads surface geometry.
+- Dispatch changed from `draw_surfaces(&scene.surfaces[range])` to `draw_surfaces(scene, range)`,
+  because the absolute index is needed for `batch_start_index`, not just a slice.
+- `draw_surfaces` splits a batch into maximal runs sharing one handle - a draw call can bind
+  only one texture - so the common single-surface case stays a single instanced draw.
+- `shared_texture_view` opens via `ID3D11Device1::OpenSharedResource1`, since CEF hands over
+  an NT handle from `CreateSharedHandle` and the legacy `OpenSharedResource` will not accept it.
+- `ShaderModule::Surface`, its `as_str` arm, and its release-bytes arm.
+
+**`crates/gpui_windows/build.rs`** - `"surface"` added to the shader module list, so release
+builds get precompiled bytes. Debug builds compile HLSL at runtime from `shaders.hlsl`, which
+is why iteration should stay on debug.
+
+### Next steps, in order
+
+1. `cargo check -p gpui_windows` - first compile of any of the renderer work. Expect errors.
+2. `cargo build -p zed`, then confirm Clay still launches and renders normally with no
+   surfaces in the scene (a pure regression check - nothing should look different yet).
+3. Write the **throwaway test producer**: a second D3D11 device creating a texture with
+   `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`, `CreateSharedHandle`, and an animated pattern.
+   A separate device is the point - it proves genuine cross-device sharing, which is what
+   CEF needs. Drive it from a scratch action or a gpui example rendering `surface(...)`.
+4. Gate: the animating texture appears inside a GPUI element, correctly clipped by
+   `content_mask` and correctly z-ordered against normal GPUI content.
+
+### Open questions deliberately deferred
+
+- **Synchronisation.** The test producer will write while the renderer samples, with no
+  fence or keyed mutex, so tearing is possible. Fine for proving the path; CEF integration
+  will need `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` or a fence.
+- **Alpha.** The surface pipeline uses the standard alpha blend state. If CEF delivers a
+  texture with zero alpha in places, content will be invisible; may need an opaque blend
+  state or to force alpha to 1 in the fragment shader.
+- **Colour space / format.** The SRV takes its format from the shared texture's own desc,
+  so BGRA vs RGBA should follow the producer, but this is untested.
+
+### Loose ends found while verifying
+
+- **`Error: could not find zed-cli from any of: bin/zed.exe, ./cli.exe`** on Clay startup -
+  stale names left by the binary rename. Non-fatal (Clay starts fine), but should be pointed
+  at the Clay CLI names.
+- The startup log still reads **"starting zed version 1.19.0+dev"**. Cosmetic branding.
+- **A one-character corruption slipped into the rebrand commit**: a stray `s` prefixed onto a
+  doc comment in `crates/zed_env_vars/src/zed_env_vars.rs`, which broke the build with
+  `expected one of ! or ::, found doc comment`. Almost certainly collateral from one of the
+  bulk `sed` passes. Fixed in a follow-up commit.
+
+  The lesson worth keeping: **rebuild immediately before committing, not just at some point
+  earlier in the session.** The debug build that would have caught this ran before the last
+  few edits, and `git add -A` then committed a tree that had never been compiled. A full
+  diff audit afterwards (`git diff upstream..HEAD` filtered for added lines mentioning
+  neither `clay` nor `Clay`) found exactly this one line and nothing else, and is a cheap
+  check worth repeating after any bulk rename.
+
+### Remaining Phase 1 follow-ups (not blockers)
+
+- **Synchronisation.** Neither the example producer nor the renderer uses a fence or keyed
+  mutex, so a partially written frame can be sampled. Not visible in practice here, but CEF
+  integration should use `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` or a fence.
+- **Alpha.** The surface pipeline uses the standard alpha blend state and the example writes
+  alpha 255 throughout, so this is untested against a texture with real transparency.
+- **Cache eviction.** `shared_textures` only ever grows and is cleared solely on device loss.
+  Fine for a handful of long-lived browser surfaces; would leak if handles churned.
+- **`crates/gpui/examples/surface.rs` is throwaway** and should be deleted once the browser is
+  the real producer. It is the reason `gpui` has a Windows-only `windows` dev-dependency.
