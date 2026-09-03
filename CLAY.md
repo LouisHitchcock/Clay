@@ -26,8 +26,8 @@ Legend: **Done** · **Active** (in progress now) · **Next** (immediately after 
 | **M0** | Fork, rebrand, isolation from stock Zed | **Done** — committed |
 | **M1** | Windows D3D11 surface compositing in GPUI | **Done** — committed |
 | **M2** | Inline browser (from Glass) — a real page renders in a pane | **Done** — gate passed 2026-09-03 |
-| **M3** | Finish the rebrand: remaining Zed branding in the UI | **Next** |
-| **M4** | Clay icons everywhere — app, tray, installer, in-app | **Next** |
+| **M3** | Finish the rebrand: remaining Zed branding in the UI | **Mostly done** — app chrome swept; `ZED_*` in `script/`/`.github/` and the tagline outstanding |
+| **M4** | Clay icons everywhere — app, tray, installer, in-app | **Blocked on artwork** — see below |
 | **M5** | AI account switcher | **Planned** |
 | **M6** | Continue-after-credit-reset scheduling | **Planned** |
 | **M7** | Unified AI terminal | **Planned** |
@@ -46,22 +46,50 @@ not sweep user-facing display strings, and those are the visible leftovers.
 
 | Item | Where | Status |
 |---|---|---|
-| App menu titled "Zed", with "About Zed" and "Quit Zed" | `crates/zed/src/zed/app_menus.rs:63,66,104` | Open |
-| "Welcome back to Zed" on the empty-workspace screen | `crates/workspace/src/welcome.rs:451` | Open |
-| "Welcome to Zed" / "The editor for what's next" in onboarding | `crates/onboarding/src/onboarding.rs:354,358` | Open |
-| "Welcome to Zed AI / Pro / Business / VIP / Student" | `crates/ai_onboarding/src/ai_onboarding.rs`, 7 sites | Open |
-| Remaining user-facing `Zed` string literals | ~80 across 30 crates; heaviest are `language_models` (11), `agent_ui` (11), `zed` (9), `ui` (7), `settings_ui` (6) | Open |
+| App menu titled "Zed", with "About Zed" and "Quit Zed" | `crates/zed/src/zed/app_menus.rs` | **Done** — now uses `ReleaseChannel::display_name()`, so a dev build reads "Clay Dev" and stable reads "Clay", matching upstream's convention of distinguishing channels |
+| "Welcome back to Zed" on the empty-workspace screen | `crates/workspace/src/welcome.rs` | **Done** — verified on screen |
+| "Welcome to Zed" in onboarding | `crates/onboarding/src/onboarding.rs` | **Done** |
+| About-window title, launch-failure dialog and notification, CLI system-specs header | `crates/zed/src/zed.rs`, `crates/zed/src/main.rs` | **Done** |
+| Update-available and xdg-portal notifications, collab "unshared project" / "window outside of Zed" labels | `crates/workspace/src/notifications.rs`, `pane_group.rs` | **Done** |
+| macOS single-instance banner and the move-to-Applications flow | `mac_only_instance.rs`, `move_to_applications.rs` | **Done** — string-only, not verifiable from Windows |
+| "Setup Zed REPL for …" tooltip | `crates/zed/src/zed/quick_action_bar/repl_menu.rs` | **Done** |
+| "Welcome to Zed AI / Pro / Business / VIP / Student" | `crates/ai_onboarding/src/ai_onboarding.rs`, 7 sites | **Out of scope** — service names, per the decision above |
+| Tagline "The editor for what's next" | `crates/onboarding/src/onboarding.rs`, welcome screen | **Open, needs Louis** — this is Zed's slogan and still shows under "Welcome back to Clay". Left rather than invented; needs his words or a decision to drop the line |
 | `ZED_*` names in `script/` and `.github/` | ~40 names; packaging is inconsistent with the Rust code, which now expects `CLAY_*` | Open |
 | `GLASS_CEF_DEBUG` should become `CLAY_CEF_DEBUG` | `crates/browser` | Open |
+| Remaining `Zed` literals | What is left is diagnostics and log context (`.context("Handshake before Zed spawn")`), telemetry property descriptions, the HTTP User-Agent, test fixtures, and `ui` component previews. None is app chrome; all deliberately untouched | Open by choice |
 
-Care needed: some `Zed` strings are **not** branding and must stay — `zed.dev` URLs, the names of
-Zed-hosted model providers, the internal `zed` Cargo package, and the `IconName::Zed*` variants
-that name an asset file. A blind find-and-replace will break the build and misname third-party
-services.
+Implementation note: display strings now interpolate `paths::APP_NAME` rather than hardcoding
+"Clay", so a future rename is one constant. This meant adding `paths` as a direct dependency of
+`workspace` and `onboarding`, which reached `APP_NAME` through neither (`util::paths` is a
+different module from the `paths` crate).
+
+**Decided: app chrome only.** Menus, welcome screens, window and app titles, quit/about. The
+names of Zed-operated *services* — "Zed AI", "Zed Pro", "Zed Business", the Zed-hosted model
+providers — are deliberately left alone, because Clay would still be talking to Zed when it uses
+them, and renaming them would misrepresent whose service it is. Revisit only if the open question
+of whether Clay should talk to `zed.dev` at all is answered with "no".
+
+Also out of scope for the same reason: `zed.dev` URLs, the "Zed Repository"/"Zed Twitter"/"Email
+Us" feedback links, the internal `zed` Cargo package, and the `IconName::Zed*` variants that name
+an asset file. A blind find-and-replace would break the build and misname third-party services.
 
 ## M4 — Clay icons
 
 `clay_icon.png` sits at the repo root. It needs to become every icon Zed ships.
+
+**Blocked on artwork.** The existing `clay_icon.png` is a **64×64 raster**, which is not enough
+for either kind of slot:
+
+- The in-app logo is a *vector*. `assets/images/zed_logo.svg` is an 871-byte single-path
+  monochrome SVG at 96×96 that the theme tints, drawn at 45px on the welcome screen and 2.5rem in
+  onboarding. A 64px raster cannot be theme-tinted and will not stay crisp.
+- The Windows `.ico` files want sizes up to 256×256, and the PNG app icons include `@2x`
+  variants, so the master should be **1024×1024** to generate all of them cleanly.
+
+What is needed: an **SVG mark** for the in-app logo, and a **≥256px (ideally 1024px) master** for
+the app icons. Deliberately not upscaling the 64px file or tracing a logo by hand — that is
+Louis's brand to set, not something to invent.
 
 | Item | Where | Status |
 |---|---|---|
@@ -80,7 +108,12 @@ a Clay asset. They are small monochrome SVGs used inline with text, so a scaled-
 Multi-account AI sign-in: hold several accounts and switch between them without
 re-authenticating.
 
-Two candidate sources, and **the choice is not yet made**:
+**Decided: do both, behind one switcher UI.** A single account picker in Clay that switches the
+account for Clay's own agent *and* for the Claude Code CLI, so accounts are managed in one place.
+That means porting Lathe's crate for the former and adopting cc-switch's credential rewriting for
+the latter, behind a shared front end.
+
+The two sources:
 
 - **Lathe's `ai_accounts`** (~1.4k lines, at `_refs/lathe/crates/ai_accounts`) — per-agent account
   index, default-account resolution, on-disk persistence under `accounts_root()`, per-account

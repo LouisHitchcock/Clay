@@ -421,12 +421,12 @@ impl PaneLeaderDecorator for PaneRenderContext<'_> {
                         }
                     }
                     ParticipantLocation::UnsharedProject => Some(Label::new(format!(
-                        "{} is viewing an unshared Zed project",
-                        leader.user.username
+                        "{} is viewing an unshared {} project",
+                        leader.user.username, paths::APP_NAME
                     ))),
                     ParticipantLocation::External => Some(Label::new(format!(
-                        "{} is viewing a window outside of Zed",
-                        leader.user.username
+                        "{} is viewing a window outside of {}",
+                        leader.user.username, paths::APP_NAME
                     ))),
                 };
                 status_box = leader_status_box.map(|status| {

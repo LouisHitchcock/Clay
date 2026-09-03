@@ -448,9 +448,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            "Welcome back to Zed"
+            format!("Welcome back to {}", paths::APP_NAME)
         } else {
-            "Welcome to Zed"
+            format!("Welcome to {}", paths::APP_NAME)
         };
 
         h_flex()

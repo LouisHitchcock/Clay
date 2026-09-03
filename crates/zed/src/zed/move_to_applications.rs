@@ -73,9 +73,12 @@ impl MoveToApplicationsRequest {
         let response = cx
             .prompt(
                 PromptLevel::Info,
-                "Move Zed to Applications?",
+                format!("Move {} to Applications?", paths::APP_NAME),
                 Some(
-                    "Zed is running from a temporary location. Move it to Applications to finish installing it.",
+                    format!(
+                        "{} is running from a temporary location. Move it to Applications to finish installing it.",
+                        paths::APP_NAME
+                    ),
                 ),
                 &[
                     PromptButton::ok("Yes"),
@@ -103,7 +106,7 @@ impl MoveToApplicationsRequest {
                         .ok();
                     cx.prompt(
                         PromptLevel::Critical,
-                        "Failed to move Zed to Applications",
+                        format!("Failed to move {} to Applications", paths::APP_NAME),
                         Some(&error.to_string()),
                         &["OK"],
                     )
@@ -178,7 +181,7 @@ impl Render for InstallingZedModal {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.colors().border_variant)
-                    .child(Label::new("Installing Zed…")),
+                    .child(Label::new(format!("Installing {}…", paths::APP_NAME))),
             )
             .child(
                 h_flex()
@@ -196,9 +199,15 @@ impl Render for InstallingZedModal {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(Label::new("Moving Zed to Applications"))
+                            .child(Label::new(format!(
+                                "Moving {} to Applications",
+                                paths::APP_NAME
+                            )))
                             .child(
-                                Label::new("Zed will reopen when installation is complete.")
+                                Label::new(format!(
+                                    "{} will reopen when installation is complete.",
+                                    paths::APP_NAME
+                                ))
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
                             ),
