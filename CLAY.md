@@ -150,15 +150,35 @@ state in place (hence the `.bak-<timestamp>` files next to
    therefore gets a managed directory under `accounts_root()` with only the credentials copied
    in; settings and history start empty, since those are not account identity. The user's own
    cc-switch setup is untouched, so both keep working side by side.
-3. **Spawn wiring — next.** Populate the `extra_env` map that
-   `crates/project/src/agent_server_store.rs` already threads through its spawn paths, from the
-   resolved account plus `default_env` and `scrub_env`.
-4. **Picker UI.** **Decided: in the header row that carries the "Search threads…" filter**, next
-   to the sign-in button — `render_sidebar_header` in `crates/sidebar/src/sidebar.rs` renders at
-   `platform_title_bar_height`, so it shares a visual line with `render_sign_in_button` in
-   `crates/title_bar/src/title_bar.rs`. That keeps the active account visible without the agent
-   panel open, which is why it does not go where Lathe puts it.
-5. **System-wide action.** The cc-switch credential write.
+3. **Spawn wiring — done.** `crates/agent_servers/src/acp.rs` injects the resolved account's
+   `config_dir_env_var` before the agent subprocess is built. Remote projects are skipped, since
+   the config directory is a local path. Scrubbed API-key variables are removed from the child
+   explicitly with `env_remove` as well as from the injected map — the child inherits Clay's
+   environment, so omitting a key is not the same as removing it, and an ambient key would
+   silently override the account's subscription login.
+4. **Picker UI — done.** In the title bar immediately left of the sign-in button
+   (`render_ai_account_picker` in `crates/title_bar/src/title_bar.rs`), so the active account is
+   visible without the agent panel open. `render_sidebar_header` renders at
+   `platform_title_bar_height`, so this shares a visual line with the sidebar's
+   "Search threads…" filter. Deliberately not where Lathe puts it.
+
+   The index is cached on `TitleBar` and reloaded when the menu opens, because it is shared with
+   the CLI and Clay's other windows — reading it per frame would be file I/O in the render path,
+   and never reading it would go stale.
+
+   Verified end to end: import found `dronetech` and `personal`, skipped the `.bak-` file,
+   selecting one ticked it and changed the button label, and the choice survived reopening.
+5. **System-wide action — next.** The cc-switch credential write, for shells outside Clay.
+
+### What the picker does not do yet
+
+- **Claude Code only.** The menu is hardcoded to `CLAUDE_CODE_DESCRIPTOR`; Gemini and Codex
+  accounts exist in the store but have no UI.
+- **No add-account flow.** Accounts can be imported and switched between, but creating one means
+  going through `create_account` plus the agent's `LoginFlow` — not yet wired to a button.
+- **Sets the global default, not the workspace binding.** `AiAccountsSettings.bindings` is read
+  at spawn time and takes precedence, but nothing writes it yet, so a per-workspace override has
+  to be typed into settings by hand.
 
 Note on the Windows fix: `claude_profiles_dir()` resolved `HOME`, which is normally unset on
 Windows, so it returned `None` and the importer silently did nothing. It now goes through

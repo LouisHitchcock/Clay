@@ -18742,6 +18742,7 @@ name = "title_bar"
 version = "0.1.0"
 dependencies = [
  "agent_settings",
+ "ai_accounts",
  "anyhow",
  "arrayvec",
  "auto_update",
@@ -18757,6 +18758,7 @@ dependencies = [
  "gpui",
  "icons",
  "livekit_client",
+ "log",
  "platform_title_bar",
  "project",
  "recent_projects",

@@ -30,6 +30,8 @@ test-support = [
 
 [dependencies]
 agent_settings.workspace = true
+ai_accounts.workspace = true
+log.workspace = true
 anyhow.workspace = true
 auto_update.workspace = true
 fs.workspace = true

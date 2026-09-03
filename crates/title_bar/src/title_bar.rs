@@ -50,6 +50,7 @@ use ui::{
     Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
     PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
 };
+use ai_accounts::{AiAccountsIndex, CLAUDE_CODE_DESCRIPTOR, load_index, save_index};
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
@@ -219,6 +220,9 @@ pub struct TitleBar {
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
+    /// Cached so the picker does not read the index off disk on every frame. Reloaded whenever
+    /// the menu is opened or an account is chosen, which is the only way it can change.
+    ai_accounts: AiAccountsIndex,
     _diagnostics_subscription: Option<gpui::Subscription>,
 }
 
@@ -383,6 +387,7 @@ impl Render for TitleBar {
                 .child(self.render_call_controls(window, cx))
                 .children(self.render_connection_status(status, cx))
                 .child(self.update_version.clone())
+                .child(self.render_ai_account_picker(cx))
                 .when(
                     user.is_none()
                         && is_signed_out_or_auth_error
@@ -533,6 +538,7 @@ impl TitleBar {
             banner,
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
+            ai_accounts: load_index(),
             _diagnostics_subscription: None,
         };
 
@@ -1193,6 +1199,112 @@ impl TitleBar {
             }
             _ => None,
         }
+    }
+
+    /// The active Claude account, with a menu to switch between them.
+    ///
+    /// Lives here rather than in the agent panel so the account in use is visible without the
+    /// panel open — it sits on the same row as the sidebar's thread filter and the sign-in
+    /// button, which is where the other account controls are.
+    fn render_ai_account_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let agent_id = CLAUDE_CODE_DESCRIPTOR.agent_id;
+        let active = self.ai_accounts.default_for_agent(agent_id);
+        let label: SharedString = match active {
+            Some(account) => account.display_name.clone().into(),
+            None => "No account".into(),
+        };
+        let has_accounts = self.ai_accounts.for_agent(agent_id).next().is_some();
+        let this = cx.entity().downgrade();
+
+        PopoverMenu::new("ai-account-menu")
+            .menu(move |window, cx| {
+                // Reload before building: the index is shared with the CLI and with Clay's other
+                // windows, so a cached copy can be stale by the time the menu is opened.
+                let (accounts, active_id) = this
+                    .update(cx, |this, _| {
+                        this.ai_accounts = load_index();
+                        let active = this
+                            .ai_accounts
+                            .default_for_agent(agent_id)
+                            .map(|account| account.id.clone());
+                        let accounts: Vec<_> =
+                            this.ai_accounts.for_agent(agent_id).cloned().collect();
+                        (accounts, active)
+                    })
+                    .ok()?;
+
+                Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
+                    if accounts.is_empty() {
+                        menu = menu.header("No Claude accounts yet");
+                    }
+                    for account in accounts {
+                        let is_active = active_id.as_deref() == Some(account.id.as_str());
+                        let id = account.id.clone();
+                        menu = menu.toggleable_entry(
+                            account.display_name.clone(),
+                            is_active,
+                            IconPosition::Start,
+                            None,
+                            move |_, _| {
+                                let mut index = load_index();
+                                if let Err(error) =
+                                    index.set_default(agent_id, Some(id.clone()))
+                                {
+                                    log::error!("ai_accounts: could not switch account: {error:#}");
+                                    return;
+                                }
+                                if let Err(error) = save_index(&index) {
+                                    log::error!("ai_accounts: could not save accounts: {error:#}");
+                                }
+                            },
+                        );
+                    }
+
+                    menu.separator().entry("Import from cc-switch", None, |_, cx| {
+                        match ai_accounts::import_from_cc_switch() {
+                            Ok(report) => log::info!(
+                                "ai_accounts: imported {} account(s), skipped {}, failed {}",
+                                report.imported.len(),
+                                report.skipped_existing.len(),
+                                report.failed.len(),
+                            ),
+                            Err(error) => {
+                                log::error!("ai_accounts: cc-switch import failed: {error:#}")
+                            }
+                        }
+                        let _ = cx;
+                    })
+                }))
+            })
+            .trigger_with_tooltip(
+                ButtonLike::new("ai_account")
+                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .max_w_32()
+                            .child(
+                                Icon::new(IconName::Person)
+                                    .size(IconSize::XSmall)
+                                    .color(if has_accounts {
+                                        Color::Default
+                                    } else {
+                                        Color::Muted
+                                    }),
+                            )
+                            .child(
+                                Label::new(label)
+                                    .size(LabelSize::Small)
+                                    .color(if has_accounts {
+                                        Color::Default
+                                    } else {
+                                        Color::Muted
+                                    })
+                                    .truncate(),
+                            ),
+                    ),
+                Tooltip::text("Claude account"),
+            )
     }
 
     pub fn render_sign_in_button(&mut self, _: &mut Context<Self>) -> Button {
