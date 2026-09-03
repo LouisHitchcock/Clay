@@ -477,3 +477,465 @@ is why iteration should stay on debug.
   Fine for a handful of long-lived browser surfaces; would leak if handles churned.
 - **`crates/gpui/examples/surface.rs` is throwaway** and should be deleted once the browser is
   the real producer. It is the reason `gpui` has a Windows-only `windows` dev-dependency.
+
+---
+
+## Phase 2 IN PROGRESS - browser port
+
+### Done
+
+- `crates/browser` (11,852 lines) and `crates/toast` copied from Glass.
+- Workspace wired: both added to `members` and `workspace.dependencies`, kept alphabetical.
+- `io-surface = "0.16"` added to workspace dependencies. It was the **only** dependency the
+  browser needed that Clay lacked - everything else (`db`, `editor`, `fuzzy`, `menu`, `paths`,
+  `ui`, `theme`, `settings`, `util`, `workspace`, `zed_actions`, `parking_lot`, `image`,
+  `smallvec`, `url`) was already present. Kept rather than dropped so the macOS render path
+  stays buildable.
+- **`workspace_chrome` and `workspace_modes` dependencies dropped**, confirming the earlier
+  survey: neither needs porting.
+- Helper binary renamed `glass_helper` -> `clay_helper` (CEF requires a subprocess executable).
+
+### CEF builds on Windows
+
+`cargo check -p browser` resolved `cef v145.6.1+145.0.28`, `cef-dll-sys` and `download-cef`
+from `tauri-apps/cef-rs` and started compiling them with no errors. `cef-dll-sys`'s build
+script is what downloads the Chromium distribution. This is the Phase 2 viability gate.
+
+### Exact widget inventory (replaces the vague "56 native_* sites")
+
+Glass's browser chrome is built from macOS AppKit widgets in its GPUI fork. The real shape:
+
+| Glass API | Uses | Zed equivalent | Difficulty |
+|---|---|---|---|
+| `native_icon_button(id, sf_symbol)` | **8 distinct icons only** | `ui::IconButton` + `IconName` | Easy - full mapping below |
+| `native_tracking_view(id)` | `.on_mouse_enter` / `.on_mouse_exit` only | `div().id().on_hover(bool)` | Easy - derive enter/exit from the bool |
+| `native_image_view(id)` | dual purpose: `.sf_symbol{,_config}()` **or** `.image_uri()` for favicons, plus `.scaling` `.size` `.w` `.h` `.rounded{,_sm}` `.colors` `.flex_shrink_0` | `ui::Icon` for symbols, `gpui::img()` for favicons | Moderate - two paths behind one builder |
+| `show_native_popup_menu(items, pos, window, cx, cb)` + `NativeMenuItem` | 5 + 12 | `ui::ContextMenu` | **Hardest** - native menu is index-callback based; ContextMenu is entry+handler based, so genuine redesign |
+
+Icon mapping, all confirmed to exist in `crates/icons/src/icons.rs`:
+
+| SF Symbol | `IconName` |
+|---|---|
+| `chevron.left` / `.right` / `.up` / `.down` | `ChevronLeft` / `ChevronRight` / `ChevronUp` / `ChevronDown` |
+| `arrow.clockwise` | `RotateCw` |
+| `arrow.down.circle` | `Download` |
+| `xmark` | `Close` |
+| `xmark.circle` | `Stop` (semantically better than `XCircle` for stop-loading) |
+| `globe` (placeholder) | `Public` - **note Zed has no `Globe`** |
+
+`ui::IconButton` gets `.disabled()` from `Disableable`, `.on_click()` from `Clickable` and
+`.tooltip()` from `ButtonCommon`. Glass passes `.tooltip("Go Back")` as a plain string while
+Zed's takes a closure, so an adapter must wrap it in `Tooltip::text(...)`.
+
+### Remaining Phase 2 work, in order
+
+1. **Widget adaptation layer** for the four families above. A thin module with matching
+   builder surfaces keeps the 56 call sites and future Glass syncs cheap; the call sites get
+   renamed off `native_*` so nothing pretends to be AppKit on Windows.
+2. **Replace the mode registration** in `browser.rs` (lines 52, 58, 129, 255-292) and the
+   `set_titlebar_center_view` calls in `browser_view.rs` (1025, 1359) with a plain action that
+   opens `BrowserView` as a pane item. `BrowserView` already implements `workspace::Item`
+   (`browser_view.rs:1291`) and `BrowserToolbarStyle::Pane` already exists, so the pieces are
+   there.
+3. **`tab_strip.rs`** - replace `workspace_chrome::SidebarNavigationList` (lines 12, 160, 191)
+   with `ui` components. 27 of the widget sites are in this file.
+4. **Wire the Phase 1 render path** into `render_handler.rs`, replacing the macOS-only
+   `current_frame` with a shared D3D11 handle on Windows.
+5. **Port `script/stage-windows-cef-runtime.ps1`** so `libcef.dll` and friends land beside the
+   binary.
+6. Build, then browse a real site in a Clay pane.
+
+### CEF builds on Windows - gate passed
+
+`libcef.dll` is 257 MB on disk at `target/debug/build/cef-dll-sys-*/out/cef_windows_x86_64/`,
+833 MB total. `cef v145.6.1+145.0.28` resolved from `tauri-apps/cef-rs` and compiled with no
+errors. **The browser's Chromium dependency is viable on Windows.**
+
+### `toast` needed three upstream-drift fixes
+
+Glass forked from an older Zed, so its `Component` impl in `status_toast.rs` was stale:
+`preview` returned `Option<AnyElement>` where the trait now wants `AnyElement`, the trait
+gained a required `description`, and `IconName::GitBranchAlt` was renamed `GitBranch`. Fixed.
+
+### Icon buttons ported - no shim needed
+
+All 8 `native_icon_button` sites became plain `ui::IconButton::new(id, IconName::X)`, and the 8
+`.tooltip("string")` calls became `.tooltip(Tooltip::text("string"))` since Zed's
+`ButtonCommon::tooltip` takes a closure. Idiomatic, no compatibility layer.
+
+### Full remaining error inventory: 50 errors, categorised
+
+`cargo check -p browser` now gets all the way into the browser's own code. 50 errors, mostly in
+`tab_strip.rs` (19), `browser_view.rs` (9) and `browser.rs` (8).
+
+| # | Category | Errors | Fix |
+|---|---|---|---|
+| A | `theme.component_radius()` missing | 11 | Glass added it to its theme fork. Replace with Clay's radius or a constant. Mechanical. |
+| B | `workspace_modes` references | 7 | Delete - the mode system is not being ported. |
+| C | `IconName::Globe` missing | 4 | Use `IconName::Public`. Mechanical. |
+| D | **Glass's `workspace` fork APIs** | 7 | See below - the only category needing a decision. |
+| E | GPUI native widgets | ~6 imports covering ~40 sites | `native_image_view`, `native_tracking_view`, `NativeMenuItem`, `show_native_popup_menu`, `NativeImageScaling`, `NativeImageSymbolWeight`, `NativeSearchFieldTarget`, `Corner`, `focus_native_search_field`. Rework onto `ui::Icon` / `img()` / `div().on_hover()` / `ui::ContextMenu`. |
+| F | Misc | 5 | `ButtonSize` vs `Pixels` (3, from the icon-button port), `Keystroke::native_key_code` (2 - Glass added this field for CEF key translation; needs a Windows equivalent), mutability mismatches (2). |
+
+**Category D is the decision point.** Glass's browser calls seven APIs that exist only in
+Glass's reworked `workspace` crate:
+
+- `register_browser_mode_url_opener`, `register_embedded_browser_item_factory`
+- `WorkspaceItemKind` (both at root and in `item`), and `ItemHandle::workspace_item_kind()`
+- `WorkspaceTabsSidebarKind`
+- `Workspace::show_browser_surface()`, `::get_mode_view()`, `::close_tabs_entry()`,
+  `::terminal_session_manager()`
+
+This is the concrete bill for the earlier decision to keep `crates/workspace` close to upstream
+rather than adopting Glass's rework. Most of these are mode/chrome machinery that should simply
+be deleted along with category B. `register_embedded_browser_item_factory` is the one that may
+warrant a small, genuinely useful addition to Clay's `workspace` so a browser tab can be
+restored from serialized workspace state.
+
+### Progress: 50 -> 32 errors
+
+**Browser tabs will persist without touching `crates/workspace` at all.** Zed already has a
+complete item-persistence system - the `SerializableItem` trait (`workspace/src/item.rs:409`)
+plus `workspace::register_serializable_item::<I>()` (`workspace.rs:1172`). So Glass's
+`register_embedded_browser_item_factory` does not need porting: implement `SerializableItem`
+for `BrowserView` and register it. Strictly better than the small workspace addition proposed
+earlier.
+
+Mechanical categories cleared:
+
+- **11 `component_radius()` sites** collapsed to the default each already supplied via
+  `.unwrap_or(px(N))`, so visuals are unchanged and Clay's theme needs no fork. Two of them
+  used a bare `theme.` receiver rather than `cx.theme()` and needed a second pass.
+- **4 `IconName::Globe`** -> `IconName::Public`.
+- **3 `.size(px(18.))`** -> `.icon_size(IconSize::Small)`, since Glass's native button took a
+  pixel size where `ui`'s takes a `ButtonSize`.
+
+### The remaining 32 errors, and the decision they force
+
+| Cluster | Errors | Notes |
+|---|---|---|
+| `tab_strip.rs` - Glass's browser tab sidebar | 19 | `workspace_chrome::SidebarNavigationList`, `WorkspaceTabsSidebarKind`, `Workspace::activate_tabs_entry`/`close_tabs_entry`, plus most native widget sites |
+| `workspace_modes` references | 6 | `browser.rs:52`, `browser_view.rs:39,1025,1026,1359,1360` |
+| Glass `workspace` fork APIs | ~5 | `WorkspaceItemKind`, `ItemHandle::workspace_item_kind`, `register_browser_mode_url_opener`, `get_mode_view`, `terminal_session_manager`, `show_browser_surface` |
+| GPUI native widgets outside tab_strip | ~6 | `native_image_view` (favicons), `show_native_popup_menu` + `NativeMenuItem`, `NativeSearchFieldTarget`, `Corner`, `focus_native_search_field` |
+| `Keystroke::native_key_code` | 2 | Glass added this field for CEF key translation; needs a Windows equivalent |
+
+**`crates/browser/src/browser_view/tab_strip.rs` is 1,022 lines implementing
+`BrowserSidebarPanel`** - Glass's in-view browser tab sidebar. It is used from `browser_view.rs`
+in only 4 places (lines 9, 12, 216, 1499, 1505). It accounts for 19 of the 32 remaining errors
+and is the sole consumer of `workspace_chrome`.
+
+This is precisely the Glass window chrome the approved plan said to rework rather than copy.
+Deleting it means choosing the **one page per Zed pane tab** model: Zed's own pane tabs become
+the browser tabs, sitting beside editor tabs. That is what the plan describes, and Glass already
+has a `BrowserPaneItem` (`browser_view.rs:1226`) for exactly this. The cost is losing Glass's
+in-view tab strip and its pinning behaviour.
+
+### Per-project tabs: upstream Zed already has this
+
+Louis wants multiple projects open in one Clay window, tabbed between quickly, rather than one
+window per project. **`crates/workspace/src/multi_workspace.rs` (2,199 lines) already implements
+exactly that**, and it is upstream Zed code, not something Glass added:
+
+- A workspace switcher sidebar, "one row per workspace held by this window"
+- Actions: `ToggleWorkspaceSidebar`, `FocusWorkspaceSidebar`, `NextProject`, `PreviousProject`,
+  `MoveProjectUp`, `MoveProjectDown`, `MoveProjectToNewWindow`, plus thread equivalents
+- `ProjectGroup`, `ProjectGroupState` and `SerializedProjectGroupState`, so the arrangement
+  persists across restarts
+- Already bound: **`ctrl-alt-j`** toggles it in `assets/keymaps/default-windows.json:672`, and
+  it is wired into `crates/zed/src/main.rs` via `get_any_active_multi_workspace`
+
+**The catch, and the one change Clay wants:**
+
+```rust
+pub fn multi_workspace_enabled(&self, cx: &App) -> bool {
+    !DisableAiSettings::get_global(cx).disable_ai && AgentSettings::get_global(cx).enabled
+}
+```
+
+The sidebar is a combined **projects + agent-threads** switcher (hence `NextThread` / `NewThread`),
+so upstream ties it to the agent being enabled. For Clay the project switcher should work
+regardless of AI settings, so decoupling that gate is a small, well-targeted change.
+
+This also dovetails with the unified AI terminal: a switcher that already lists both projects
+and agent threads is the natural home for that surface.
+
+*Caveat: an automated `ctrl-alt-j` keystroke test did not visibly open the sidebar in a
+screenshot. That may be the AI gate, or simply SendKeys not reaching the window. The code, the
+keybinding and the wiring are all confirmed present by inspection; the runtime behaviour is not
+yet confirmed.*
+
+### Sidebar decision resolved: delete Glass's, build on upstream's
+
+Glass's `BrowserSidebarPanel` (`tab_strip.rs` regions 3 and 5, ~550 lines) should be **deleted,
+not ported**. Upstream's `multi_workspace` sidebar is better integrated, already persists, and
+is the thing Louis actually wants. Porting Glass's would mean building a second, worse sidebar
+system alongside it.
+
+Revised plan for `tab_strip.rs`:
+
+1. **Port** `show_tab_context_menu` (19-93) onto `ui::ContextMenu`. Note the callback shape
+   changes: Glass's native menu is index-based (`|action_index, ...| if action_index == 0`),
+   `ContextMenu` is entry-plus-handler, so dispatch must be restructured rather than translated.
+2. **Port** `render_tab_favicon` (94-112) - `img(url)` with an `Icon::new(IconName::Public)`
+   fallback.
+3. **Port** `render_tab_strip` (243-600) - mechanical: 3 tracking views to `div().on_hover()`,
+   2 image views to `img`/`Icon`.
+4. **Delete** `BrowserSidebarPanel` (113-242) and `render_sidebar` / `ensure_native_sidebar_panel`
+   (601-1022), plus their 4 call sites in `browser_view.rs` (lines 9, 12, 216, 1505).
+5. Separately, **decouple `multi_workspace_enabled` from the AI settings** so per-project tabs
+   work unconditionally.
+
+### Phase 2 progress: 50 -> 9 errors, all architecture done
+
+Every remaining error is the AppKit widget block. **Caveat: 6 of the 9 are unresolved-import
+errors that currently mask ~40 downstream call sites**, so the count understates the work left.
+Nothing architectural remains.
+
+**Sidebar deleted (552 lines).** `BrowserSidebarPanel` (130 lines) and
+`render_sidebar`/`ensure_native_sidebar_panel` (422 lines) removed from `tab_strip.rs`, which
+went 1,022 -> 470 lines with braces balanced. Also removed: the `TabBarMode::Sidebar` variant
+and its render arm, `toggle_sidebar` / `handle_toggle_sidebar` and their action registration,
+two sidebar-notify blocks in `tabs.rs`, and the `workspace_chrome` dependency entirely.
+`session.rs` now pins `tab_bar_mode` to `Horizontal` and serialises `sidebar: false`, keeping
+the field so existing saved sessions still deserialise.
+
+**Mode system removed.** Deleted the `ModeViewRegistry` factory (49 lines) and the four
+navigation-host helpers plus `open_browser_mode_url` (63 lines) from `browser.rs`, and the three
+now-dead navigation functions from `browser_view.rs` (`navigation_entries`,
+`activate_navigation_entry`, `close_navigation_entry`, 50 lines). Glass pushed the browser
+toolbar into the title bar via `set_titlebar_center_view`; both calls are gone, since Clay's
+browser toolbar belongs to the pane toolbar.
+
+**Browser now opens as an ordinary tab.** `OpenBrowserPane` used to call Glass's
+`workspace.show_browser_surface(...)`; it now calls a new `open_browser_tab()` that creates a
+`BrowserView`, wraps it in the existing `BrowserPaneItem`, and calls
+`workspace.add_item_to_active_pane(...)`.
+
+**Toolbar reworked for the pane-item model.** Glass had one global browser, so
+`attach_browser_toolbar_to_pane` fetched it via `workspace.get_mode_view(ModeId::BROWSER)` and a
+workspace-wide attach also walked `terminal_session_manager()` panes. Clay attaches on demand
+when a `BrowserPaneItem` lands in a pane, taking the view from the item itself via a new
+`BrowserPaneItem::browser_view()` accessor. `WorkspaceItemKind::Browser` tagging was replaced
+with `item.downcast::<BrowserPaneItem>()`, matching how Zed identifies item types elsewhere.
+
+### What is left
+
+| Item | Sites | Notes |
+|---|---|---|
+| `native_image_view` | ~15 | Two forms: `.image_uri(url)` -> `img(url)`, and `.sf_symbol("globe")` -> `Icon::new(IconName::Public)` |
+| `native_tracking_view` | ~9 | Needs real rewriting, not a sed: Glass has separate `on_mouse_enter`/`on_mouse_exit` closures, GPUI's `div().on_hover()` reports a single bool, so the two closures must merge into one branch |
+| `show_native_popup_menu` + `NativeMenuItem` | 5 + 12 | Hardest: index-callback dispatch -> `ui::ContextMenu`'s entry+handler model |
+| `NativeSearchFieldTarget` / `focus_native_search_field` | 3 | Omnibox focus; the crate already depends on `editor` |
+| `Keystroke::native_key_code` | 2 | Glass added this field for CEF key translation; needs a Windows virtual-key equivalent |
+| `Corner`, `NativeImageScaling`, `NativeImageSymbolWeight` | - | Styling params that fall away with the above |
+| **`SerializableItem` for `BrowserView`** | - | Not yet started. Required for Louis's browser-tab persistence, via `workspace::register_serializable_item` |
+
+### Browser crate compiles, and the Windows render path is wired
+
+`cargo check -p browser` is **clean**. The remaining widget work was resolved as follows:
+
+- **`navigation.rs`** - the AppKit `focus_native_search_field` call was removed; the
+  `#[cfg(not(target_os = "macos"))]` branch immediately below it already focused the omnibox
+  through the toolbar, so that path is now unconditional.
+- **`input.rs`** - `Keystroke::native_key_code` was a Glass addition carrying a *macOS* virtual
+  keycode. Upstream GPUI has no such field on any platform, so the existing
+  `key_name_to_windows_vk(&keystroke.key)` fallback is now the only path, which is what CEF
+  wants on Windows anyway. `macos_keycode_to_windows_vk` is kept but marked `dead_code`.
+- **`Corner` -> `Anchor`** - upstream renamed the type; variants are identical.
+- **Image views** - `.image_uri(url)` became `img(url)`, and `.sf_symbol("globe")` became
+  `Icon::new(IconName::Public)`. The 96px placeholder uses `IconSize::Custom(rems(6.0))`,
+  since `Icon` has no `custom_size`.
+- **Tracking views** - a small `HoverTracker` helper keeps Glass's `on_mouse_enter` /
+  `on_mouse_exit` builder shape while dispatching from GPUI's single-boolean `on_hover`. It
+  delegates `Styled` to a wrapped div, because the call sites position themselves. This kept
+  9 intricate call sites unchanged instead of rewriting each by hand.
+
+**Context menus are stubbed, not ported.** Both bookmark menus and the tab menu are `TODO`s
+with their handlers intentionally inert. Glass's AppKit popup dispatches on an item *index*
+from one callback, whereas `ui::ContextMenu` takes a handler per entry and needs menu state
+plus a dismiss subscription on the owning view. That is a restructure rather than a
+translation, and it is not on the path to seeing a web page, so it was deferred.
+
+**Windows render path (the Phase 1 work, now connected to CEF):**
+
+- `RenderState::current_frame` gains a `#[cfg(target_os = "windows")] Option<SharedTexture>`.
+- `on_accelerated_paint` reads `info.shared_texture_handle` - cef-rs types this as a raw
+  `*mut c_void` on Windows, not a newtype, so it is used directly. The texture belongs to
+  CEF's GPU process and is only borrowed; its size comes from `RenderState`, which `view_rect`
+  already maintains.
+- `FrameReady` was macOS-gated in three places (`events.rs`, `tab.rs` twice, `browser_view.rs`);
+  all now cover Windows.
+- `content.rs` draws `surface(frame)` on Windows as well as macOS.
+
+**Wired into the app:** `browser.workspace = true` added to `crates/zed`, `browser::init(cx)`
+called beside `terminal_view::init(cx)`, and `browser::handle_cef_subprocess()` called early in
+`main` - CEF re-executes the binary for helper processes, and a subprocess never returns from
+that call.
+
+*Watch item:* the first placement of that call landed between `#[cfg(unix)]` and
+`util::prevent_root_execution()`, which would have silently disabled CEF on Windows **and**
+stripped the unix gate off root-execution prevention. Caught by reading the result back;
+a reminder that inserting before an anchor line can capture a preceding attribute.
+
+**`script/stage-windows-cef-runtime.ps1`** written for Clay. Unlike Glass's, it stages into the
+target directory *beside the binary* rather than a `cef_runtime/` subdirectory, because the
+loader must find `libcef.dll` at process start and CEF resolves `*.pak` / `icudtl.dat` /
+`locales/` relative to the executable. It skips unchanged files, which matters since
+`libcef.dll` alone is ~250 MB.
+
+Still outstanding: `SerializableItem` for browser-tab persistence, the context menus, and
+renaming the `GLASS_CEF_DEBUG` env var to `CLAY_CEF_DEBUG`.
+
+### Browser is running: CEF initialises on Windows
+
+`cargo build -p zed` is clean with the browser wired in, and Clay launches with CEF live -
+a helper subprocess (~100 MB) sits alongside the main process, and `browser::init` logs no
+error, which it would if `CefInstance::initialize` had failed.
+
+**Two bugs found getting there, both worth remembering:**
+
+1. **`Copy-Item -LiteralPath` does not expand wildcards.** The staging script's
+   `Copy-Item -LiteralPath (Join-Path $localesSource "*")` silently copied *nothing*, so
+   `locales/` was created but empty. CEF hard-fails without its locale paks: the process died
+   with `STATUS_BREAKPOINT` (`0x80000003`) **before logging was initialised**, which made it
+   look like a crash on startup rather than a missing resource. Fixed by using `-Path`.
+2. **Two `cef-dll-sys-*` build directories exist** with identical timestamps, and two more that
+   are empty. The "newest `libcef.dll`" heuristic can pick either; both happened to be complete,
+   but a staging script should prefer a directory that actually contains `locales/`.
+
+Staged beside the binary: `libcef.dll` (245 MB), `chrome_elf.dll`, `d3dcompiler_47.dll`,
+`libEGL.dll`, `libGLESv2.dll`, `vk_swiftshader.dll`, the three `.pak` files, `icudtl.dat`,
+`v8_context_snapshot.bin` and 220 locale files. Note the distribution has no `snapshot_blob.bin`
+(modern CEF only ships `v8_context_snapshot.bin`) and does include `bootstrap.exe`, which is not
+currently used.
+
+**`browser::OpenBrowserPane` is bound to `ctrl-alt-n`** in `assets/keymaps/default-windows.json`.
+Dev builds read assets from the checkout at runtime (`util::fs_embed!`), so keymap edits apply on
+next launch with no rebuild.
+
+**Not yet confirmed: that a browser tab actually renders a page.** Automated keystroke injection
+proved unreliable - `SendKeys` went to whatever window held focus rather than Clay - so this
+needs a human pressing `ctrl-alt-n`. Everything up to that point is verified.
+
+### How to test
+
+1. Run `target\debug\clay.exe`.
+2. Press **`ctrl-alt-n`**, or use the command palette (`ctrl-shift-p`) and pick
+   **`browser: open browser pane`**.
+3. A browser tab should open beside the editor tabs.
+
+Expected gaps: right-click menus do nothing (stubbed), and browser tabs do not yet survive a
+restart (`SerializableItem` not implemented).
+
+### Phase 2 gate PASSED - a real page renders in a Clay pane on Windows (2026-09-03)
+
+Verified on screen: `example.com`, `example.org`, `rust-lang.org`, a Google search and a
+logged-in Instagram profile all render as page pixels inside a browser pane, with correct
+colours, working omnibox, navigation buttons, tab titles and favicons.
+
+#### The blocker: CEF's shared texture is callback-scoped
+
+The page had been loading correctly for some time - correct titles and favicons came back - but
+`ID3D11Device::OpenSharedResource` **and** `OpenSharedResource1` both returned `E_INVALIDARG`
+for the handle from `on_accelerated_paint`, and the content area stayed on "Loading...".
+
+CEF's own header documentation settles it, in the bindings at
+`sys/src/bindings/x86_64_pc_windows_msvc.rs` (line 11473 for `on_accelerated_paint`, 1147 for
+`_cef_accelerated_paint_info_t`):
+
+> on Windows it is a HANDLE to a texture that can be opened with D3D11 **OpenSharedResource1**
+> or D3D12 OpenSharedHandle... The underlying implementation uses a **pool** to deliver frames.
+> As a result, the handle may differ every frame depending on how many frames are in-progress.
+> **The handle's resource cannot be cached and cannot be accessed outside of this callback. It
+> should be reopened each time this callback is executed and the contents should be copied to a
+> texture owned by the client application.** The contents of |info| will be released back to the
+> pool after this callback returns.
+
+And on the handle field: *"The shared texture is instantiated without a keyed mutex."*
+
+So the handle is an NT handle, valid only for the duration of the callback. Storing it and
+opening it later on the render thread - which is what the design did - could never work. The
+diagnostic that pointed here was the handle changing almost every frame while the size stayed
+correct.
+
+**Phase 1 did not catch this** because its test producer created one long-lived NT-handle
+texture. It validated the compositing path but never the handle-lifetime assumption. Worth
+remembering as a lesson about what a stand-in producer does and does not prove.
+
+#### The fix
+
+`crates/browser/src/frame_bridge.rs` does what CEF asks. A `FrameBridge` opens CEF's texture
+inside the callback with `OpenSharedResource1`, `CopyResource`s it into a long-lived texture it
+owns (`SHARED_NTHANDLE | SHARED`, `BIND_SHADER_RESOURCE`), and `Flush()`es. GPUI is handed a
+handle to *that*, which stays stable while the frame size and format hold, so the renderer can
+still cache a shader resource view for it.
+
+- **One device serves every tab.** The bridge device is a process-wide lazy static with the
+  immediate context behind its own mutex. A D3D11 device is free-threaded; the immediate context
+  is not, and is reachable only through that mutex.
+- **The adapter must match GPUI's.** DXGI cannot share a texture across adapters, so the bridge
+  walks `EnumAdapters` from zero and keeps the first that yields a D3D11 device - deliberately
+  the same walk as `gpui_windows::directx_devices` - and logs the adapter name so a mismatch is
+  diagnosable against GPUI's own `Using GPU:` line.
+- **No keyed mutex or fence.** CEF creates its textures without one, and Clay runs CEF with
+  `external_message_pump = 1`, which puts the callback on the main thread - the same thread that
+  draws the scene - so the copy and the draw are already ordered.
+
+`SharedTexture` gained an `id: u64`. Windows recycles handle *values*, so a producer that
+replaces its texture on a resize can be handed back a numeric handle the renderer already has a
+cached view for, and would then keep drawing the old texture. `directx_renderer.rs` now keys its
+cache and its draw-run splitting on the id, and clears the cache past 8 entries so a drag-resize
+cannot grow it without bound.
+
+#### Three more bugs found once pixels were on screen
+
+1. **No omnibox.** A pane holds one toolbar item per type, so a single `BrowserToolbar` serves
+   every browser tab in the pane - but `set_active_pane_item` only decided visibility, so the
+   toolbar stayed bound to whichever browser opened first. That was a new tab page, where the
+   omnibox is deliberately hidden. It now rebinds to the active item's browser view and observes
+   that view, so switching tabs inside the browser follows too.
+
+   Two supporting faults: `BrowserView` owned a second, never-rendered `TitleBar`-style toolbar
+   (the render tree had lost its child, leaving a dangling `#[cfg(not(target_os = "macos"))]`
+   attached to the macOS branch), and `FocusOmnibox` was focusing *that*, so ctrl-L did nothing.
+   And both "if changed" guards in the toolbar compared entity ids without checking whether a
+   subscription existed, which skipped the *initial* bind - leaving the omnibox with no
+   `AddressChanged` subscription, so it showed its placeholder rather than the current URL.
+
+2. **A stranded tab on every launch.** `open_browser_tab` called `add_tab` unconditionally, but
+   `BrowserView::new` already leaves a tab behind - the restored session, or a new tab page if
+   there was nothing to restore. The extra tab was then saved back out, so the count grew by one
+   per run. Now conditional on `has_tabs()`.
+
+3. **A restored session rendered blank.** Exposed by fixing (2), since a restored tab is now the
+   one in front. `create_browser` succeeded and the load started, but `on_accelerated_paint`
+   never fired. **A windowless CEF browser created before the message loop has run never begins
+   painting** - and `ensure_browser_created` was creating the browser *before* starting the pump,
+   the only path that did. Split into `start_message_pump_if_ready` and
+   `ensure_active_tab_browser`, so the pump starts on one pass and the browser is created on the
+   next. That also means any restored tab loads the first time it comes to the front.
+
+Also fixed: `cargo test -p browser` had never compiled, because two `#[cfg(test)]` helpers built
+a `gpui::Keystroke` with a `native_key_code` field that upstream no longer has. 25 tests pass.
+
+#### Driving the UI for verification
+
+`SendKeys` automation works, but **only** when gated on `GetForegroundWindow()` matching Clay's
+window. An ungated attempt typed a search into a browser window that happened to hold focus.
+`SwitchToThisWindow` is more reliable than `SetForegroundWindow` for raising the window first.
+
+Note also that Clay's log file is buffered and flushes only on exit, so `log::` output is
+invisible at runtime and lost entirely if the process is killed. Use `eprintln!` and capture
+stderr; `_refs/run_clay.bat` redirects to `_refs/clay_stderr.txt`.
+
+#### Remaining Phase 2 gaps
+
+- Right-click menus are stubbed (`TODO`s in `tab_strip.rs` and `bookmarks.rs`).
+- `SerializableItem` is not implemented, so a browser *pane* does not survive a restart, even
+  though the tab list does. Use `workspace::register_serializable_item::<BrowserView>`.
+- `ctrl-alt-*` keybindings do not fire on this machine, almost certainly AltGr on a UK layout.
+  The `ctrl-k ctrl-b` chord did not fire either; the command palette is the reliable route.
+- `ZED_*` variables in `script/` and `.github/` were not renamed, and `GLASS_CEF_DEBUG` should
+  become `CLAY_CEF_DEBUG`.
+- The renderer's "scene too large" error prefix is misleading - it wraps every batch failure.

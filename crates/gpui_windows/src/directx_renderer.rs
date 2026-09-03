@@ -58,7 +58,7 @@ pub(crate) struct DirectXRenderer {
     /// viable for a browser surface repainting continuously, so views are cached for
     /// the lifetime of the device. Cleared on device loss, because both the views and
     /// the textures behind them belong to the device that has gone away.
-    shared_textures: HashMap<isize, ID3D11ShaderResourceView>,
+    shared_textures: HashMap<u64, ID3D11ShaderResourceView>,
 
     /// Whether we want to skip drwaing due to device lost events.
     ///
@@ -854,13 +854,13 @@ impl DirectXRenderer {
         // instanced draw per run, so the common case of a single surface stays one call.
         let mut run_start = range.start;
         while run_start < range.end {
-            let handle = scene.surfaces[run_start].texture.handle;
+            let texture = scene.surfaces[run_start].texture;
             let mut run_end = run_start + 1;
-            while run_end < range.end && scene.surfaces[run_end].texture.handle == handle {
+            while run_end < range.end && scene.surfaces[run_end].texture.id == texture.id {
                 run_end += 1;
             }
 
-            let texture_view = self.shared_texture_view(&devices.device, handle)?;
+            let texture_view = self.shared_texture_view(&devices.device, texture)?;
             self.pipelines.surface_pipeline.draw_range_with_texture(
                 &devices.device_context,
                 slice::from_ref(&texture_view),
@@ -879,21 +879,42 @@ impl DirectXRenderer {
     fn shared_texture_view(
         &mut self,
         device: &ID3D11Device,
-        handle: isize,
+        texture: SharedTexture,
     ) -> Result<Option<ID3D11ShaderResourceView>> {
-        if let Some(view) = self.shared_textures.get(&handle) {
+        let id = texture.id;
+        // Keyed on the id rather than the handle: handle values get recycled, so a producer
+        // that recreates its texture can hand back a value we already have a view for.
+        if let Some(view) = self.shared_textures.get(&id) {
             return Ok(Some(view.clone()));
         }
 
-        // Producers such as CEF hand over an NT handle from `CreateSharedHandle`, which
-        // must be opened with `OpenSharedResource1`; the older `OpenSharedResource` only
-        // accepts legacy shared handles.
-        let device1: ID3D11Device1 = device
-            .cast()
-            .context("querying ID3D11Device1 to open a shared texture")?;
-        let texture: ID3D11Texture2D =
-            unsafe { device1.OpenSharedResource1(HANDLE(handle as *mut _)) }
-                .context("opening a shared texture handle")?;
+        // There are two kinds of shared handle and they need different open calls, with no
+        // way to tell them apart from the value alone. An NT handle from `CreateSharedHandle`
+        // requires `OpenSharedResource1`; a legacy handle from `GetSharedHandle` requires
+        // `OpenSharedResource`, and each rejects the other's handle with E_INVALIDARG.
+        //
+        // Every producer we have creates NT handles, so that is tried first, with the legacy
+        // path kept as a fallback for handles that arrive from elsewhere.
+        let raw = HANDLE(texture.handle as *mut _);
+        let texture: ID3D11Texture2D = unsafe {
+            let device1: ID3D11Device1 = device
+                .cast()
+                .context("querying ID3D11Device1 to open a shared texture")?;
+            match device1.OpenSharedResource1(raw) {
+                Ok(texture) => texture,
+                Err(nt_error) => {
+                    let mut legacy: Option<ID3D11Texture2D> = None;
+                    device
+                        .OpenSharedResource(raw, &mut legacy)
+                        .with_context(|| {
+                            format!(
+                                "opening a shared texture handle as both an NT handle                                  ({nt_error}) and a legacy handle"
+                            )
+                        })?;
+                    legacy.context("legacy shared resource was not opened")?
+                }
+            }
+        };
 
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { texture.GetDesc(&mut desc) };
@@ -915,7 +936,13 @@ impl DirectXRenderer {
                 .context("creating a shader resource view for a shared texture")?;
         }
         let view = view.context("shader resource view was not created")?;
-        self.shared_textures.insert(handle, view.clone());
+        // Producers replace their texture when the surface resizes, and nothing tells us when
+        // the old one stops being drawn, so keep the cache from growing across a drag-resize.
+        // Reopening is cheap next to the churn of holding every generation alive.
+        if self.shared_textures.len() >= 8 {
+            self.shared_textures.clear();
+        }
+        self.shared_textures.insert(id, view.clone());
         Ok(Some(view))
     }
 

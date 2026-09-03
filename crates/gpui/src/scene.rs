@@ -775,10 +775,28 @@ impl From<PolychromeSprite> for Primitive {
 #[cfg(target_os = "windows")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SharedTexture {
+    /// Identifies the texture behind `handle` for the life of the process.
+    ///
+    /// Windows recycles handle *values*, so a producer that closes one shared texture and
+    /// creates another — on a resize, say — can be handed back the same numeric handle for
+    /// a different texture. A renderer that caches per-texture GPU state must therefore key
+    /// on this rather than on `handle`, or it will keep drawing the old texture. Allocate
+    /// one with [`SharedTexture::next_id`].
+    pub id: u64,
     /// A DXGI shared-resource handle, valid in this process.
     pub handle: isize,
     /// The texture's pixel dimensions, needed to lay out the quad it is drawn onto.
     pub size: Size<crate::DevicePixels>,
+}
+
+#[cfg(target_os = "windows")]
+impl SharedTexture {
+    /// Allocate an `id` that no other shared texture in this process will use.
+    pub fn next_id() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 #[derive(Clone, Debug)]

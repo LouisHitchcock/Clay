@@ -206,6 +206,13 @@ fn main() {
     // own arguments.
     sandbox::run_sandbox_launcher_if_invoked();
 
+    // CEF re-executes this binary for its helper processes. That has to be handled before
+    // any other initialisation, because a subprocess never returns from here.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Err(error) = browser::handle_cef_subprocess() {
+        eprintln!("CEF subprocess handling warning: {error}");
+    }
+
     #[cfg(unix)]
     util::prevent_root_execution();
 
@@ -758,6 +765,7 @@ fn main() {
         });
         vim::init(cx);
         terminal_view::init(cx);
+        browser::init(cx);
         journal::init(app_state.clone(), cx);
         encoding_selector::init(cx);
         language_selector::init(cx);

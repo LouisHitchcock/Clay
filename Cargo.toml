@@ -22,6 +22,7 @@ members = [
     "crates/bedrock",
     "crates/benchmarks",
     "crates/breadcrumbs",
+    "crates/browser",
     "crates/buffer_diff",
     "crates/call",
     "crates/call_hierarchy",
@@ -219,6 +220,7 @@ members = [
     "crates/theme_settings",
     "crates/time_format",
     "crates/title_bar",
+    "crates/toast",
     "crates/toolchain_selector",
     "crates/ui",
     "crates/ui_input",
@@ -295,6 +297,7 @@ auto_update_ui = { path = "crates/auto_update_ui" }
 aws_http_client = { path = "crates/aws_http_client" }
 bedrock = { path = "crates/bedrock" }
 breadcrumbs = { path = "crates/breadcrumbs" }
+browser = { path = "crates/browser" }
 buffer_diff = { path = "crates/buffer_diff" }
 call = { path = "crates/call" }
 call_hierarchy = { path = "crates/call_hierarchy" }
@@ -485,6 +488,7 @@ theme_selector = { path = "crates/theme_selector" }
 theme_settings = { path = "crates/theme_settings" }
 time_format = { path = "crates/time_format" }
 title_bar = { path = "crates/title_bar" }
+toast = { path = "crates/toast" }
 toolchain_selector = { path = "crates/toolchain_selector" }
 ui = { path = "crates/ui" }
 ui_input = { path = "crates/ui_input" }
@@ -663,6 +667,7 @@ imara-diff = "0.2.0"
 indexmap = { version = "2.7.0", features = ["serde"] }
 indoc = "2"
 inventory = "0.3.19"
+io-surface = "0.16"
 itertools = "0.14.0"
 js-sys = "0.3"
 json_dotpath = "1.1"

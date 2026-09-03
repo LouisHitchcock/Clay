@@ -43,6 +43,7 @@ mod imp {
     struct Producer {
         context: ID3D11DeviceContext,
         texture: ID3D11Texture2D,
+        id: u64,
         handle: isize,
         pixels: Vec<u8>,
     }
@@ -111,6 +112,7 @@ mod imp {
             Ok(Self {
                 context,
                 texture,
+                id: SharedTexture::next_id(),
                 handle: handle.0 as isize,
                 pixels: vec![0; (TEXTURE_SIZE * TEXTURE_SIZE * 4) as usize],
             })
@@ -165,6 +167,7 @@ mod imp {
             window.request_animation_frame();
 
             let texture = SharedTexture {
+                id: self.producer.id,
                 handle: self.producer.handle,
                 size: size(
                     DevicePixels(TEXTURE_SIZE as i32),
