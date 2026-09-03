@@ -2,15 +2,143 @@
 
 Clay is a fork of [Zed](https://github.com/zed-industries/zed) that combines an inline browser, a unified AI terminal, and selected tooling from other Zed forks.
 
-**This file is the source of truth for "where are we".** Update it after each meaningful unit of work. It exists so that work can resume cleanly across sessions without reconstructing context from a lost conversation.
+**This file is the source of truth for "where are we".** Start with the **Roadmap and scope tracker** immediately below: it is the live status of every wanted feature. Everything after it is the historical record, kept for rationale rather than status. Update both after each meaningful unit of work. It exists so that work can resume cleanly across sessions without reconstructing context from a lost conversation.
 
 Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\binary-wandering-cray.md`.
 
 ---
 
-## Current status
+# Roadmap and scope tracker
 
-**Phase 0 (fork, build, baseline) — COMPLETE.** See "Phase 0 COMPLETE" below for gate evidence; the table here is the per-item record.
+Status at a glance. Everything below the horizontal rule that closes this section is the
+historical record — read that for *why* a thing was done, not for *whether* it is done.
+
+**Keep this table current.** It is the first thing anyone reads, including a future session
+picking up cold.
+
+Legend: **Done** · **Active** (in progress now) · **Next** (immediately after Active) ·
+**Planned** · **Deferred** (wanted, not scheduled) · **Cut** (decided against)
+
+## Milestones, in priority order
+
+| # | Milestone | Status |
+|---|---|---|
+| **M0** | Fork, rebrand, isolation from stock Zed | **Done** — committed |
+| **M1** | Windows D3D11 surface compositing in GPUI | **Done** — committed |
+| **M2** | Inline browser (from Glass) — a real page renders in a pane | **Done** — gate passed 2026-09-03 |
+| **M3** | Finish the rebrand: remaining Zed branding in the UI | **Next** |
+| **M4** | Clay icons everywhere — app, tray, installer, in-app | **Next** |
+| **M5** | AI account switcher | **Planned** |
+| **M6** | Continue-after-credit-reset scheduling | **Planned** |
+| **M7** | Unified AI terminal | **Planned** |
+| **M8** | Rest of the Lathe port — `pr_ui`, workspace groups | **Planned** |
+| **M9** | Integration between browser, terminal and editor | **Planned** — deliberately last |
+
+This ordering supersedes the original Phase 3/4/5 plan further down the file. What changed: the
+rebrand and icon work is pulled to the front, and the AI account switcher is pulled out of the
+Lathe milestone and ahead of the AI terminal, because it is wanted soonest.
+
+## M3 — Finish the rebrand
+
+The isolation rebrand (M0) covered the names that matter for *not colliding with a stock Zed
+install*: data directories, identifiers, env vars, URL scheme, binary name. It deliberately did
+not sweep user-facing display strings, and those are the visible leftovers.
+
+| Item | Where | Status |
+|---|---|---|
+| App menu titled "Zed", with "About Zed" and "Quit Zed" | `crates/zed/src/zed/app_menus.rs:63,66,104` | Open |
+| "Welcome back to Zed" on the empty-workspace screen | `crates/workspace/src/welcome.rs:451` | Open |
+| "Welcome to Zed" / "The editor for what's next" in onboarding | `crates/onboarding/src/onboarding.rs:354,358` | Open |
+| "Welcome to Zed AI / Pro / Business / VIP / Student" | `crates/ai_onboarding/src/ai_onboarding.rs`, 7 sites | Open |
+| Remaining user-facing `Zed` string literals | ~80 across 30 crates; heaviest are `language_models` (11), `agent_ui` (11), `zed` (9), `ui` (7), `settings_ui` (6) | Open |
+| `ZED_*` names in `script/` and `.github/` | ~40 names; packaging is inconsistent with the Rust code, which now expects `CLAY_*` | Open |
+| `GLASS_CEF_DEBUG` should become `CLAY_CEF_DEBUG` | `crates/browser` | Open |
+
+Care needed: some `Zed` strings are **not** branding and must stay — `zed.dev` URLs, the names of
+Zed-hosted model providers, the internal `zed` Cargo package, and the `IconName::Zed*` variants
+that name an asset file. A blind find-and-replace will break the build and misname third-party
+services.
+
+## M4 — Clay icons
+
+`clay_icon.png` sits at the repo root. It needs to become every icon Zed ships.
+
+| Item | Where | Status |
+|---|---|---|
+| Windows app and tray icon | `crates/zed/resources/windows/app-icon{,-dev,-preview,-nightly}.ico` | Open |
+| PNG app icons | `crates/zed/resources/app-icon*.png` — 8 files including `@2x` | Open |
+| macOS document icon | `crates/zed/resources/Document.icns` | Open |
+| Installer and desktop entry | `crates/zed/resources/windows/zed.iss`, `zed.desktop.in`, `flatpak/`, `snap/` | Open |
+| In-app logo glyphs | `assets/icons/ai_zed.svg`, `zed_agent*.svg`, `zed_assistant.svg`, `zed_predict*.svg`, and the `IconName::Zed*` variants pointing at them | Open |
+
+Open question: whether the in-app glyphs should be *redrawn* as Clay marks or simply repointed at
+a Clay asset. They are small monochrome SVGs used inline with text, so a scaled-down
+`clay_icon.png` will not read well at 12–16px — an SVG mark is probably needed.
+
+## M5 — AI account switcher
+
+Multi-account AI sign-in: hold several accounts and switch between them without
+re-authenticating.
+
+Two candidate sources, and **the choice is not yet made**:
+
+- **Lathe's `ai_accounts`** (~1.4k lines, at `_refs/lathe/crates/ai_accounts`) — per-agent account
+  index, default-account resolution, on-disk persistence under `accounts_root()`, per-account
+  state, `AiAccountsSettings::resolve_account`. Nothing equivalent upstream. Lathe also has a
+  multi-account **collab** switcher, which lives in its `client`/`title_bar` edits rather than in
+  the crate.
+- **cc-switch** — the Claude Code Multi-Account Switcher, which changes the active account by
+  rewriting Claude Code's own credential and `oauthList` state.
+
+These solve overlapping but different problems: Lathe's crate switches which account *Clay's own
+agent* uses, while cc-switch switches which account the *Claude Code CLI* uses. Resolve before
+starting.
+
+## M6 — Continue after credit limits reset
+
+Schedule a follow-up message to be delivered once usage limits reset, so a long-running agent
+task resumes on its own.
+
+Requirements as stated:
+
+- **Fully automatic by default** — no user input at the moment of reset.
+- **A manual option too**, so the user can drive it for their own automation.
+
+Not yet designed. Open questions: how the reset time is discovered (parsed from an API error,
+read from a response header, or computed from a known window); whether the follow-up is a stored
+prompt replayed into the same thread or a fresh turn; and how it interacts with M5, since
+switching accounts is the other obvious response to hitting a limit.
+
+## M7 — Unified AI terminal
+
+Design already recorded under "Scope: what Clay adds" below, unchanged: one block timeline, three
+block kinds (shell command bounded by OSC 133 marks, agent turn, in-process app command), with
+the **agent as the default input and `!` as the explicit shell escape**.
+
+## M8 — Rest of the Lathe port
+
+`pr_ui` (~6.7k lines — real PR review, since upstream Zed is link-out only) and workspace groups
+(~1k self-contained lines, the cheapest item and a good first port). Re-measure against Zed at
+Lathe's sync point first: Lathe is ~7 weeks behind our base, so diffs overstate its change set.
+
+## Open gaps carried forward — wanted, not yet scheduled
+
+| Item | Notes |
+|---|---|
+| Browser `SerializableItem` | Browser *tabs* survive a restart but the *pane* does not. Louis asked for this explicitly. Use `workspace::register_serializable_item::<BrowserView>`; needs no changes to `crates/workspace`. |
+| Browser right-click menus | Stubbed, with `TODO`s in `tab_strip.rs` and `bookmarks.rs`. Glass dispatched on an item index from a single AppKit callback; `ui::ContextMenu` takes a handler per entry and needs menu state plus a dismiss subscription on the owning view. |
+| `ctrl-alt-*` and chord keybindings do not fire | Almost certainly AltGr on a UK layout. The command palette is the reliable route meanwhile. |
+| Misleading "scene too large" error prefix | It wraps every renderer batch failure, not just size problems. |
+| `clay_icon.png` appears in the repo root at runtime | Something writes it during a run. Left untracked; worth finding the writer. |
+| Deferred from Lathe | Theme customizer (135+ colours, cheap and self-contained) and `git_graph`, which overlaps upstream's `git_ui/src/git_graph.rs`. |
+| Cut from Lathe | `mobile_dev` (Expo/React Native) and `aws_dev`. |
+| Undecided | Whether Clay should talk to `zed.dev` at all — collab, telemetry and docs endpoints are untouched. |
+
+---
+
+## Historical record: Phase 0 (fork, build, baseline)
+
+**COMPLETE.** See "Phase 0 COMPLETE" below for gate evidence; the table here is the per-item record.
 
 | Item | State |
 |---|---|
@@ -40,9 +168,9 @@ Full design rationale lives in the plan file: `C:\Users\Louis\.claude\plans\bina
 
 ### Immediate next actions
 
-All Phase 0 actions are complete. Next up is **Phase 1 — Windows surface compositing**; see the end of this file for the concrete steps.
+See the tracker at the top of this file.
 
-Outstanding housekeeping: `clay/rebrand-and-isolate` is unpushed and unmerged to `main`.
+Outstanding housekeeping: `clay/rebrand-and-isolate` is pushed but still unmerged to `main`.
 
 ### Known follow-ups (deliberately not done yet)
 
@@ -211,6 +339,10 @@ Upstream keeps GPUI in-tree, split into `gpui` / `gpui_platform` / `gpui_macos` 
 ---
 
 ## Phase plan
+
+**Ordering here is superseded by the tracker at the top of this file** — the rebrand, icons and
+the AI account switcher were pulled ahead. The gates below still stand as the definition of done
+for each body of work.
 
 | Phase | Content | Gate |
 |---|---|---|
@@ -480,7 +612,7 @@ is why iteration should stay on debug.
 
 ---
 
-## Phase 2 IN PROGRESS - browser port
+## Phase 2 COMPLETE - browser port
 
 ### Done
 
