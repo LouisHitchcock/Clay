@@ -8,6 +8,7 @@ use agent_client_protocol::schema::{
     v1::{self as acp, ErrorCode},
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, JsonRpcResponse, Lines, Responder};
+use ai_accounts::{AiAccountsSettings, descriptor_for, load_index, mark_account_used};
 use anyhow::anyhow;
 use async_channel;
 use collections::{HashMap, HashSet};
@@ -821,7 +822,7 @@ impl AcpConnection {
                 .cloned()
         });
         let original_command = command.clone();
-        let (path, args, env) = project
+        let (path, args, mut env) = project
             .read_with(cx, |project, cx| {
                 project.remote_client().and_then(|client| {
                     let template = client
@@ -846,9 +847,82 @@ impl AcpConnection {
                 )
             });
 
+        // Point the agent at the bound account's config directory, which is how an account is
+        // selected: nothing is rewritten in place, the subprocess is simply told to look
+        // somewhere else. Resolution is workspace binding, then the agent's default account,
+        // then nothing — an agent with no descriptor or no resolved account is left alone.
+        //
+        // Remote projects are skipped: the config directory is a local path, and handing it to
+        // an agent running on another machine would point it at a directory that is not there.
+        let mut scrub_env: &'static [&'static str] = &[];
+        let is_local_project = project.read_with(cx, |project, _| project.is_local());
+        if is_local_project {
+            let agent_id_str = agent_id.as_ref();
+            if let Some(descriptor) = descriptor_for(agent_id_str) {
+                let settings = cx.try_read_global::<SettingsStore, _>(|store, _| {
+                    store.get::<AiAccountsSettings>(None).clone()
+                });
+                if let Some(account) = settings
+                    .as_ref()
+                    .and_then(|settings| {
+                        let index = load_index();
+                        settings
+                            .resolve_account(agent_id_str, &index)
+                            .cloned()
+                    })
+                {
+                    env.insert(
+                        descriptor.config_dir_env_var.to_string(),
+                        account.config_dir.display().to_string(),
+                    );
+
+                    if agent_id_str == GEMINI_ID {
+                        // A relocated Gemini config directory has no auth type selected, and the
+                        // CLI fails with AuthRequired rather than prompting.
+                        if let Err(error) =
+                            ai_accounts::ensure_gemini_api_key_auth_selected(&account.config_dir)
+                        {
+                            log::warn!(
+                                "ai_accounts: could not select Gemini auth for {}: {error:#}",
+                                account.id
+                            );
+                        }
+                    }
+
+                    // Benign if it fails: this only orders the account list, so log and carry on
+                    // rather than blocking the thread from starting.
+                    if let Err(error) = mark_account_used(&account.id) {
+                        log::warn!(
+                            "ai_accounts: could not record last use of {}: {error:#}",
+                            account.id
+                        );
+                    }
+
+                    // An ambient API key silently overrides the account's subscription login, so
+                    // the account would appear bound while the agent used something else.
+                    scrub_env = descriptor.scrub_env;
+                    for key in scrub_env {
+                        env.remove(*key);
+                    }
+                }
+
+                // Protective defaults, applied only where nothing upstream has an opinion:
+                // workspace settings, the user's shell environment and remote templates all win.
+                for (key, value) in descriptor.default_env {
+                    env.entry(key.to_string())
+                        .or_insert_with(|| value.to_string());
+                }
+            }
+        }
+
         let builder = ShellBuilder::new(&Shell::System, cfg!(windows)).non_interactive();
         let mut child = builder.build_std_command(Some(path.clone()), &args);
         child.envs(env.clone());
+        // The child inherits Clay's own environment, so a scrubbed key has to be removed from
+        // the child explicitly — leaving it out of `env` above is not enough.
+        for key in scrub_env {
+            child.env_remove(*key);
+        }
         if let Some(cwd) = project.read_with(cx, |project, _cx| {
             if project.is_local() {
                 root_dir.as_ref()
