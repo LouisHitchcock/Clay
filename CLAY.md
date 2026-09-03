@@ -114,8 +114,38 @@ re-authenticating.
 
 **Decided: do both, behind one switcher UI.** A single account picker in Clay that switches the
 account for Clay's own agent *and* for the Claude Code CLI, so accounts are managed in one place.
-That means porting Lathe's crate for the former and adopting cc-switch's credential rewriting for
-the latter, behind a shared front end.
+
+### Survey result: one mechanism covers most of both
+
+Lathe's `ai_accounts` does not rewrite credentials. It gives each account **its own config
+directory** and points the agent at it through a per-agent environment variable — see
+`AgentDescriptor::config_dir_env_var`, which is `CLAUDE_CONFIG_DIR` for Claude Code,
+`GEMINI_CLI_HOME` for the Gemini CLI and `CODEX_HOME` for Codex. Switching account is therefore
+just spawning with a different env var: non-destructive, no backups needed, and several accounts
+can be live at once in different processes.
+
+That single mechanism gives us both halves for anything **Clay spawns** — its own ACP agent and
+any Claude Code CLI started from Clay's terminal inherit the same variable.
+
+What it does *not* give us is cc-switch's behaviour of changing the account for a CLI started
+**outside** Clay, from any shell. cc-switch achieves that by rewriting `~/.claude`'s credential
+state in place (hence the `.bak-<timestamp>` files next to
+`~/.claude/accounts/<name>.credentials.json`). So:
+
+- **Port Lathe's `ai_accounts`** (1,408 lines, single file) for per-account config dirs. This is
+  the bulk of the work and the foundation of the UI.
+- **Add one extra action, "make this the system-wide account"**, which does cc-switch's in-place
+  credential write, with a backup, for shells outside Clay. A small addition on top, not a second
+  system.
+
+### Two things found in the survey that need fixing during the port
+
+- **`claude_profiles_dir()` looks at `~/.claude-profiles/<name>/`**, which is not where cc-switch
+  keeps accounts (`~/.claude/accounts/<name>.credentials.json`). The existing importer will not
+  find Louis's existing accounts; a cc-switch importer needs adding alongside it.
+- **It reads `HOME`**, which is usually unset on Windows — `USERPROFILE` is the equivalent. As
+  written, `claude_profiles_dir()` returns `None` on Windows and the importer silently does
+  nothing. Needs `paths`-based resolution instead.
 
 The two sources:
 
