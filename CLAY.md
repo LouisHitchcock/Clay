@@ -28,7 +28,7 @@ Legend: **Done** · **Active** (in progress now) · **Next** (immediately after 
 | **M2** | Inline browser (from Glass) — a real page renders in a pane | **Done** — gate passed 2026-09-03 |
 | **M3** | Finish the rebrand: remaining Zed branding in the UI | **Mostly done** — app chrome swept; `ZED_*` in `script/`/`.github/` and the tagline outstanding |
 | **M4** | Clay icons everywhere — app, tray, installer, in-app | **Mostly done** — app/tray icons and the in-app logo shipped; macOS `.icns`, packaging and the AI feature glyphs outstanding |
-| **M5** | AI account switcher | **Planned** |
+| **M5** | AI account switcher | **In progress** — crate ported, cc-switch importer written; spawn wiring and UI next |
 | **M6** | Continue-after-credit-reset scheduling | **Planned** |
 | **M7** | Unified AI terminal | **Planned** |
 | **M8** | Rest of the Lathe port — `pr_ui`, workspace groups | **Planned** |
@@ -137,6 +137,32 @@ state in place (hence the `.bak-<timestamp>` files next to
 - **Add one extra action, "make this the system-wide account"**, which does cc-switch's in-place
   credential write, with a backup, for shells outside Clay. A small addition on top, not a second
   system.
+
+### Build order and progress
+
+1. **Account store — done.** `crates/ai_accounts` ported and compiling, 36 tests passing. Wiring
+   it up needed an `ai_accounts` field on `SettingsContent`, which in turn had to be registered
+   with the `flattened_deserialize!` field list and the VS Code importer's initialiser.
+2. **cc-switch importer — done.** `import_from_cc_switch()` registers each
+   `~/.claude/accounts/<name>.credentials.json`. Unlike the claude-profiles importer it cannot
+   register by reference, because cc-switch's accounts all share the one `~/.claude` config
+   directory — pointing several accounts at it would make them the same account. Each import
+   therefore gets a managed directory under `accounts_root()` with only the credentials copied
+   in; settings and history start empty, since those are not account identity. The user's own
+   cc-switch setup is untouched, so both keep working side by side.
+3. **Spawn wiring — next.** Populate the `extra_env` map that
+   `crates/project/src/agent_server_store.rs` already threads through its spawn paths, from the
+   resolved account plus `default_env` and `scrub_env`.
+4. **Picker UI.** **Decided: in the header row that carries the "Search threads…" filter**, next
+   to the sign-in button — `render_sidebar_header` in `crates/sidebar/src/sidebar.rs` renders at
+   `platform_title_bar_height`, so it shares a visual line with `render_sign_in_button` in
+   `crates/title_bar/src/title_bar.rs`. That keeps the active account visible without the agent
+   panel open, which is why it does not go where Lathe puts it.
+5. **System-wide action.** The cc-switch credential write.
+
+Note on the Windows fix: `claude_profiles_dir()` resolved `HOME`, which is normally unset on
+Windows, so it returned `None` and the importer silently did nothing. It now goes through
+`util::paths::home_dir()`.
 
 ### Two things found in the survey that need fixing during the port
 
@@ -264,6 +290,23 @@ Outstanding housekeeping: `clay/rebrand-and-isolate` is pushed but still unmerge
 - **Never push to `upstream`.** Its push URL is deliberately broken as a guard.
 - **Run `git merge upstream/main` after each phase.** If a phase makes upstream merges materially harder, that is a signal the integration was too invasive — revisit rather than absorb the cost.
 - **Checkpoint progress into this file continuously**, not when a session is about to end.
+- **Watch `target/` — it grows without bound.** On 2026-09-03 a link failed with
+  `LNK1318: Unexpected PDB error; FILE_SYSTEM (3)`, which turned out to be a full disk rather
+  than anything wrong with the code. `target/` was **129 GB**: 74.8 GB of
+  `debug/incremental`, 29.8 GB of `debug/deps`, 8.2 GB of `debug/build`, 13.9 GB of stale
+  `release/`. Actual binaries were only ~2 GB of that.
+
+  The incremental cache is the offender: cargo writes fresh per-crate state on every rebuild and
+  never prunes older generations, so a day of iteration adds tens of GB. `debug/build` also
+  accumulates duplicates — two `cef-dll-sys-*` directories at 0.81 GB each and four
+  `webrtc-sys-*` at up to 0.57 GB, one per config hash cargo has ever seen.
+
+  So: **check `target/` size periodically and clear `debug/incremental` when it gets large.**
+  It is pure cache; deleting it costs one slower rebuild and nothing else. The dev profile
+  already sets `debug = "limited"` and `split-debuginfo = "unpacked"`, so debug info is as lean
+  as it gets without losing usable backtraces; the remaining lever would be
+  `[profile.dev] incremental = false`, which stops the growth at the cost of slower rebuilds
+  when editing large crates.
 
 ---
 

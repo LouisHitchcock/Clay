@@ -598,6 +598,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_accounts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "collections",
+ "log",
+ "paths",
+ "serde",
+ "serde_json",
+ "settings",
+ "smol",
+ "util",
+ "uuid",
+]
+
+[[package]]
 name = "ai_onboarding"
 version = "0.1.0"
 dependencies = [

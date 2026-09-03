@@ -206,6 +206,12 @@ pub struct SettingsContent {
     pub agent: Option<AgentSettingsContent>,
     pub agent_servers: Option<AllAgentServersSettings>,
 
+    /// Workspace-bound AI agent account selection: maps agent IDs (e.g. `"claude-acp"`)
+    /// to AI account IDs registered in Clay's accounts index. Used to inject the agent's
+    /// config-dir env var (e.g. `CLAUDE_CONFIG_DIR`) at ACP spawn time so that multiple
+    /// subscription-authenticated identities can be used per-workspace.
+    pub ai_accounts: Option<AiAccountsMap>,
+
     /// Configuration of audio in Zed.
     pub audio: Option<AudioSettingsContent>,
 
@@ -390,6 +396,36 @@ impl std::ops::DerefMut for FeatureFlagsMap {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, MergeFrom)]
+#[serde(transparent)]
+pub struct AiAccountsMap(pub HashMap<String, String>);
+
+impl JsonSchema for AiAccountsMap {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AiAccountsMap".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+        })
+    }
+}
+
+impl std::ops::Deref for AiAccountsMap {
+    type Target = HashMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for AiAccountsMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl SettingsContent {
     pub fn languages_mut(&mut self) -> &mut HashMap<String, LanguageSettingsContent> {
         &mut self.project.all_languages.languages.0
@@ -400,7 +436,8 @@ fallible_options::flattened_deserialize!(SettingsContent {
     sections: { project, theme, extension, workspace, editor, remote },
     options: {
         call_hierarchy, file_finder, git_panel, tabs, tab_bar, status_bar, preview_tabs, agent,
-        agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
+        agent_servers, ai_accounts, audio, auto_update, base_keymap, collaboration_panel, debugger,
+        diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,
         journal, log, line_indicator_format, language_models, outline_panel, project_panel,
