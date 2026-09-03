@@ -6,7 +6,7 @@ use fs::Fs;
 use gpui::{
     Action, AnyElement, App, AppContext, AsyncWindowContext, Context, Entity, EventEmitter,
     FocusHandle, Focusable, Global, IntoElement, KeyContext, Render, ScrollHandle, SharedString,
-    Subscription, Task, WeakEntity, Window, actions,
+    Subscription, Task, WeakEntity, Window, actions, img,
 };
 use notifications::status_toast::StatusToast;
 use project::agent_server_store::AllAgentServersSettings;
@@ -347,20 +347,20 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(Vector::square(VectorName::ZedLogo, rems(2.5)))
                                             .child(
-                                                v_flex()
-                                                    .child(
-                                                        Headline::new(format!("Welcome to {}", paths::APP_NAME))
-                                                            .size(HeadlineSize::Small),
-                                                    )
-                                                    .child(
-                                                        Label::new("The editor for what's next")
-                                                            .color(Color::Muted)
-                                                            .size(LabelSize::Small)
-                                                            .italic(),
-                                                    ),
-                                            ),
+                                                // See the note in `welcome.rs`: the Clay mark is
+                                                // multi-colour, so it cannot go through `Vector`.
+                                                img("images/clay_logo.svg")
+                                                    .flex_none()
+                                                    .size(rems(2.5)),
+                                            )
+                                            .child(v_flex().child(
+                                                Headline::new(format!(
+                                                    "Welcome to {}",
+                                                    paths::APP_NAME
+                                                ))
+                                                .size(HeadlineSize::Small),
+                                            )),
                                     )
                                     .child({
                                         Button::new("finish_setup", "Finish Setup")

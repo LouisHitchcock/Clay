@@ -209,6 +209,9 @@ fn main() {
 
         #[cfg(windows)]
         {
+            // Without this, changing the icon does not rebuild the embedded resource: the
+            // only rerun-if-changed for the icon lives in the X11 path, which is Linux-only.
+            println!("cargo:rerun-if-changed={}", icon_path().to_string_lossy());
             windows_resources::compile(false).expect("failed to compile Windows resources");
         }
     }
@@ -217,7 +220,10 @@ fn main() {
     prepare_app_icon_x11();
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+// Windows is included because the resource compiler needs the path too; the function already
+// had a #[cfg(windows)] branch inside it, which was unreachable while the function itself was
+// gated to the X11 platforms.
+#[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
 fn icon_path() -> std::path::PathBuf {
     use std::str::FromStr;
 

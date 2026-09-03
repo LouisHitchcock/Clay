@@ -27,7 +27,7 @@ Legend: **Done** · **Active** (in progress now) · **Next** (immediately after 
 | **M1** | Windows D3D11 surface compositing in GPUI | **Done** — committed |
 | **M2** | Inline browser (from Glass) — a real page renders in a pane | **Done** — gate passed 2026-09-03 |
 | **M3** | Finish the rebrand: remaining Zed branding in the UI | **Mostly done** — app chrome swept; `ZED_*` in `script/`/`.github/` and the tagline outstanding |
-| **M4** | Clay icons everywhere — app, tray, installer, in-app | **Blocked on artwork** — see below |
+| **M4** | Clay icons everywhere — app, tray, installer, in-app | **Mostly done** — app/tray icons and the in-app logo shipped; macOS `.icns`, packaging and the AI feature glyphs outstanding |
 | **M5** | AI account switcher | **Planned** |
 | **M6** | Continue-after-credit-reset scheduling | **Planned** |
 | **M7** | Unified AI terminal | **Planned** |
@@ -76,32 +76,36 @@ an asset file. A blind find-and-replace would break the build and misname third-
 
 ## M4 — Clay icons
 
-`clay_icon.png` sits at the repo root. It needs to become every icon Zed ships.
+The masters are `clay_icon.svg` and `clay_icon.png` at the repo root, both added by Louis. The
+SVG is a **vectorised pixel-art trace** of the 64×64 PNG: 8 paths of 1×1 rectangles, 8 hardcoded
+fills, `shape-rendering="crispEdges"`.
 
-**Blocked on artwork.** The existing `clay_icon.png` is a **64×64 raster**, which is not enough
-for either kind of slot:
+Two consequences worth knowing before touching this again:
 
-- The in-app logo is a *vector*. `assets/images/zed_logo.svg` is an 871-byte single-path
-  monochrome SVG at 96×96 that the theme tints, drawn at 45px on the welcome screen and 2.5rem in
-  onboarding. A 64px raster cannot be theme-tinted and will not stay crisp.
-- The Windows `.ico` files want sizes up to 256×256, and the PNG app icons include `@2x`
-  variants, so the master should be **1024×1024** to generate all of them cleanly.
-
-What is needed: an **SVG mark** for the in-app logo, and a **≥256px (ideally 1024px) master** for
-the app icons. Deliberately not upscaling the 64px file or tracing a logo by hand — that is
-Louis's brand to set, not something to invent.
+- **The mark is multi-colour, so it cannot go through `Vector`.** `Vector` renders via gpui's
+  `svg()`, which masks the file and tints it with a single theme colour — the mark would flatten
+  to a silhouette. The places that show the logo use `img()` instead, which goes through
+  `usvg`/`resvg` and keeps the colours. gpui's `img()` does accept `.svg`.
+- **Every icon size is an exact multiple or divisor of 64**, so the raster can be scaled without
+  inventing detail. `_refs/gen_icons.py` upscales with NEAREST (matching the SVG's `crispEdges`,
+  so it is equivalent to rasterising the vector) and downscales 16px/32px with LANCZOS, where
+  legibility beats crisp edges.
 
 | Item | Where | Status |
 |---|---|---|
-| Windows app and tray icon | `crates/zed/resources/windows/app-icon{,-dev,-preview,-nightly}.ico` | Open |
-| PNG app icons | `crates/zed/resources/app-icon*.png` — 8 files including `@2x` | Open |
-| macOS document icon | `crates/zed/resources/Document.icns` | Open |
-| Installer and desktop entry | `crates/zed/resources/windows/zed.iss`, `zed.desktop.in`, `flatpak/`, `snap/` | Open |
-| In-app logo glyphs | `assets/icons/ai_zed.svg`, `zed_agent*.svg`, `zed_assistant.svg`, `zed_predict*.svg`, and the `IconName::Zed*` variants pointing at them | Open |
+| Windows app and tray icon | `crates/zed/resources/windows/app-icon{,-dev,-preview,-nightly}.ico`, each 16/32/64/128/256 | **Done** — verified by extracting the icon from `clay.exe` |
+| PNG app icons | `crates/zed/resources/app-icon*.png` — 8 files, 512 and 1024 | **Done** |
+| In-app logo, welcome screen and onboarding | `crates/workspace/src/welcome.rs`, `crates/onboarding/src/onboarding.rs` | **Done** — full colour, verified on screen |
+| `VectorName::ZedLogo` → `ClayLogo`, asset `images/clay_logo.svg` | `crates/ui/src/components/image.rs` | **Done** — `zed_logo.svg` deleted |
+| macOS document icon | `crates/zed/resources/Document.icns` | Open — this Pillow build cannot write ICNS, so it needs `iconutil` on a Mac or another tool |
+| Installer and desktop entry | `crates/zed/resources/windows/zed.iss`, `zed.desktop.in`, `flatpak/`, `snap/` | Open — packaging, alongside the `ZED_*` renames |
+| AI feature glyphs | `assets/icons/ai_zed.svg`, `zed_agent*.svg`, `zed_assistant.svg`, `zed_predict*.svg` | Open — these are small monochrome feature icons, not the app logo, and some name Zed features rather than Clay's. Needs a decision per icon |
+| Channel differentiation | All four channels now share one mark | Open — Zed's dev/preview/nightly icons were differently coloured, so builds are no longer distinguishable by icon |
 
-Open question: whether the in-app glyphs should be *redrawn* as Clay marks or simply repointed at
-a Clay asset. They are small monochrome SVGs used inline with text, so a scaled-down
-`clay_icon.png` will not read well at 12–16px — an SVG mark is probably needed.
+Build-script fix needed along the way: `cargo:rerun-if-changed` for the icon lived only in the
+X11 path, and `icon_path()` was gated to Linux/FreeBSD despite containing a `#[cfg(windows)]`
+branch. Changing the `.ico` therefore did not rebuild the embedded resource on Windows — the exe
+kept Zed's mark until the gate was widened.
 
 ## M5 — AI account switcher
 
@@ -162,7 +166,7 @@ Lathe's sync point first: Lathe is ~7 weeks behind our base, so diffs overstate 
 | Browser right-click menus | Stubbed, with `TODO`s in `tab_strip.rs` and `bookmarks.rs`. Glass dispatched on an item index from a single AppKit callback; `ui::ContextMenu` takes a handler per entry and needs menu state plus a dismiss subscription on the owning view. |
 | `ctrl-alt-*` and chord keybindings do not fire | Almost certainly AltGr on a UK layout. The command palette is the reliable route meanwhile. |
 | Misleading "scene too large" error prefix | It wraps every renderer batch failure, not just size problems. |
-| `clay_icon.png` appears in the repo root at runtime | Something writes it during a run. Left untracked; worth finding the writer. |
+
 | Deferred from Lathe | Theme customizer (135+ colours, cheap and self-contained) and `git_graph`, which overlaps upstream's `git_ui/src/git_graph.rs`. |
 | Cut from Lathe | `mobile_dev` (Expo/React Native) and `aws_dev`. |
 | Undecided | Whether Clay should talk to `zed.dev` at all — collab, telemetry and docs endpoints are untouched. |

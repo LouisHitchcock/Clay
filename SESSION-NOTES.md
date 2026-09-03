@@ -34,8 +34,6 @@ profile — correct colours, working omnibox, navigation buttons, tab titles and
   `looks_like_url` looks correct and `RawUrl` is pushed first, so this may well be an artefact
   of the scripted `ctrl-a`-then-type timing in my automation. Needs a manual reproduction before
   it is worth investigating.
-- `clay_icon.png` appeared in the repo root at 12:46 during a build/run cycle. Something writes
-  it at runtime. Deliberately **not** committed; left on disk.
 - The `Network service crashed or was terminated, restarting service` line from CEF still
   appears once at startup, just before the first paint. It does not appear to hurt anything.
 

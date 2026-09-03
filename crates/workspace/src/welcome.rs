@@ -10,7 +10,7 @@ use gpui::{
     Action, App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     ParentElement, Render, Styled, Task, TaskExt, Window, actions,
 };
-use gpui::{WeakEntity, linear_color_stop, linear_gradient};
+use gpui::{WeakEntity, img, linear_color_stop, linear_gradient};
 use menu::{SelectNext, SelectPrevious};
 
 use schemars::JsonSchema;
@@ -477,15 +477,14 @@ impl Render for WelcomePage {
                             .justify_center()
                             .mb_4()
                             .gap_4()
-                            .child(Vector::square(VectorName::ZedLogo, rems_from_px(45_f32)))
                             .child(
-                                v_flex().child(Headline::new(welcome_label)).child(
-                                    Label::new("The editor for what's next")
-                                        .size(LabelSize::Small)
-                                        .color(Color::Muted)
-                                        .italic(),
-                                ),
-                            ),
+                                // `img` rather than `Vector`: the Clay mark is multi-colour, and
+                                // `Vector` tints an SVG with a single theme colour.
+                                img("images/clay_logo.svg")
+                                    .flex_none()
+                                    .size(rems_from_px(45_f32)),
+                            )
+                            .child(v_flex().child(Headline::new(welcome_label))),
                     )
                     .child(first_section.render(Default::default(), &self.focus_handle))
                     .child(second_section)
