@@ -9,6 +9,8 @@
 
 pub mod input;
 pub mod timeline;
+pub mod view;
 
 pub use input::{COMMAND_SIGIL, Route, SHELL_SIGIL, looks_like_shell_command, route};
+pub use view::{AiTerminalView, OpenAiTerminal, init};
 pub use timeline::{AgentBlock, Block, BlockId, BlockKind, CommandBlock, ShellBlock, Timeline};

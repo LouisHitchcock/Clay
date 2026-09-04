@@ -235,6 +235,14 @@
     },
   },
   {
+    "context": "AiTerminal > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "ai_terminal::Submit",
+      "alt-enter": "editor::Newline",
+    },
+  },
+  {
     "context": "AgentFeedbackMessageEditor > Editor",
     "bindings": {
       "escape": "menu::Cancel",

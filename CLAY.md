@@ -520,6 +520,35 @@ results belong in the same history. Two decisions worth keeping:
   so a success cannot be narrated as one, and it truncates from the *end* because a failing
   command's last lines carry the error while its first are progress noise.
 
+**The pane item — done** (`view.rs`). `ai_terminal: open ai terminal` opens a tab with the
+timeline above and an editor below. Verified on screen: `git status` becomes an agent block,
+`!ls -la` a shell block, `/help` a command block, each with its own icon.
+
+The input is an **editor, not a shell prompt**, which is what makes agent-first work at all — the
+shell never sees a keystroke until a `!` line is submitted, so there is no readline competing for
+the same keys. Enter submits and alt-Enter inserts a newline, following the binding pattern the
+agent's own message editor already uses (`AiTerminal > Editor` context).
+
+Two things worth remembering from building it:
+
+- `Focusable::focus_handle` must return the **input's** handle, not the container's. Returning the
+  container's meant activating the tab focused nothing and typing went nowhere.
+- The shell hint renders under the input and is driven by `looks_like_shell_command`, but the
+  submit path never consults it. Typing `git status` shows "prefix with ! to run it" and still
+  goes to the agent, which is the behaviour the design requires.
+
+Agent and shell blocks currently say plainly that they are waiting on the agent connection and on
+shell integration. That is deliberate over a stub that pretends to work: the routing and the
+timeline are real, the two backends are the next pieces.
+
+### What is left in M7
+
+1. **The in-tree event loop** — the chosen route to shell integration, and the riskiest piece.
+   Build it behind the existing `spawn_event_loop` seam so the current path stays switchable.
+2. **Wiring agent blocks to a real thread**, so a bare line actually runs a turn.
+3. **App commands beyond `/clear`** — project and workspace navigation, settings, session
+   control. `/help` currently reports itself unknown, which is honest but unhelpful.
+
 ## M8 — Rest of the Lathe port
 
 `pr_ui` (~6.7k lines — real PR review, since upstream Zed is link-out only) and workspace groups
