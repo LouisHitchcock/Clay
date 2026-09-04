@@ -354,7 +354,34 @@ One debugging round worth recording: the scheduler appeared not to fire, and the
 test file — PowerShell's `Out-File -Encoding utf8` writes a **byte-order mark**, which
 `serde_json` rejects, so the store loaded nothing and said so only in the buffered log. `load`
 now strips a BOM, since any Windows tool might add one and a schedule quietly vanishing is a bad
-failure. Pinned by a test. Two shortcomings are deliberate and documented in the
+failure. Pinned by a test.
+
+### The trigger — wired, with the wording still to confirm
+
+`ThreadView::handle_thread_error` is the single place a failed turn lands, so that is where the
+check goes. `ThreadError::usage_limit_text` decides whether an error *could* be a limit:
+`Other` and `ProviderRejection` carry raw text to match against, and `RateLimitExceeded` is
+already known to be one and yields a phrase that matches, so there is one code path rather than
+two.
+
+`scheduled_followups::on_usage_limit` then runs the policy and acts: on **Switch** it binds the
+account and schedules the resume five seconds out; on **Wait** it schedules for the reset. It
+returns `None` for anything that is not a limit, so callers treat it as a filter rather than
+classifying errors themselves.
+
+**Switching accounts requires respawning the agent.** `CLAUDE_CONFIG_DIR` is read at spawn, so a
+newly bound account has no effect on a running subprocess. The resume path therefore calls
+`ConversationView::retry_connection` — which exists for exactly this, dropping the cached
+connection so the next request spawns fresh — whenever a follow-up carries an account. Done for
+every such follow-up rather than only after a switch: a process idle for hours is worth replacing
+anyway, and guessing which account the live one started with would be fragile.
+
+**What is still unverified:** the actual limit message. The patterns in
+`ai_accounts::limit_message` are educated guesses, and the wording is the one thing that cannot
+be checked without hitting a real limit. Everything downstream of it is exercised and the
+fallback is deliberate: an unreadable message still schedules a resume, just for a whole window
+rather than the stated time. Dropping the real wording in is a change to
+`looks_like_usage_limit` and `parse_clock_time` alone. Two shortcomings are deliberate and documented in the
 code: a named zone in the message is read in the local offset rather than mapped, and the exact
 wording is **still unverified against a real limit message** — which is exactly why a parse
 failure falls back to a whole window instead of dropping the resume.

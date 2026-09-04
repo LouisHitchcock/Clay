@@ -160,6 +160,24 @@ pub(crate) enum ThreadError {
     },
 }
 
+impl ThreadError {
+    /// The raw text to test for a usage limit, when this error could be one.
+    ///
+    /// Claude Code reports a limit as prose with no structured code — ACP has no `StopReason`
+    /// for it — so it arrives as `Other` or `ProviderRejection` and has to be pattern-matched.
+    /// `RateLimitExceeded` is already known to be a limit and yields a phrase that matches, so
+    /// callers have one code path rather than two.
+    pub(crate) fn usage_limit_text(&self) -> Option<SharedString> {
+        match self {
+            ThreadError::Other { message, .. } | ThreadError::ProviderRejection { message } => {
+                Some(message.clone())
+            }
+            ThreadError::RateLimitExceeded { .. } => Some("usage limit reached".into()),
+            _ => None,
+        }
+    }
+}
+
 impl From<anyhow::Error> for ThreadError {
     fn from(error: anyhow::Error) -> Self {
         if error.is::<MaxOutputTokensError>() {

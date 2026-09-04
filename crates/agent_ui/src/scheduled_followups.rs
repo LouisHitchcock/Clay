@@ -12,7 +12,9 @@ use crate::{Agent, AgentPanel, AgentThreadSource, ThreadId};
 use agent_client_protocol::schema::v1 as acp;
 use ai_accounts::{FollowUp, FollowUpReason, FollowUps, followups};
 use chrono::Utc;
-use gpui::{App, AppContext as _, AsyncApp, BorrowAppContext as _, Global, Task, WeakEntity};
+use gpui::{
+    App, AppContext as _, AsyncApp, BorrowAppContext as _, Global, SharedString, Task, WeakEntity,
+};
 use std::time::Duration;
 use workspace::Workspace;
 
@@ -230,6 +232,26 @@ async fn resume(followup: FollowUp, cx: &mut AsyncApp) {
         return;
     }
 
+    // The agent reads its config directory at spawn, so a bound account only takes effect once
+    // the subprocess restarts. Done for every follow-up carrying an account rather than only
+    // after a switch: a process that has been idle for hours is worth replacing anyway, and
+    // guessing which account the live one was started with would be fragile.
+    if followup.account_id.is_some() {
+        let restarted = workspace.update_in(cx, |workspace, window, cx| {
+            let panel = workspace.panel::<AgentPanel>(cx)?;
+            let conversation_view = panel.read(cx).active_conversation_view()?.clone();
+            conversation_view.update(cx, |view, cx| view.retry_connection(window, cx));
+            Some(())
+        });
+        if !matches!(restarted, Ok(Some(()))) {
+            log::warn!(
+                "scheduled_followups: could not restart the agent for {}; the resume may run on \
+                 the previous account",
+                followup.id
+            );
+        }
+    }
+
     // Opening can hit storage, so the view is not necessarily there yet.
     let deadline = std::time::Instant::now() + THREAD_OPEN_TIMEOUT;
     loop {
@@ -274,6 +296,111 @@ async fn resume(followup: FollowUp, cx: &mut AsyncApp) {
         }
         cx.update(|cx| cx.background_executor().timer(THREAD_POLL_INTERVAL))
             .await;
+    }
+}
+
+/// How long after switching accounts to send the follow-up.
+///
+/// The agent subprocess reads its config directory at spawn, so a switch only takes effect once
+/// it restarts. This is the grace period for that.
+const SWITCH_GRACE: chrono::TimeDelta = chrono::TimeDelta::seconds(5);
+
+/// What was decided about a turn that hit a usage limit.
+#[derive(Clone, Debug)]
+pub enum LimitAction {
+    /// Another account had allowance; it is now bound and the resume follows shortly.
+    Switched { account: SharedString },
+    /// Nothing had allowance; the resume is scheduled for when the soonest window rolls.
+    Waiting {
+        account: SharedString,
+        resume_at: chrono::DateTime<Utc>,
+    },
+}
+
+/// Reacts to a failed turn, if it failed because of a usage limit.
+///
+/// Returns `None` when the error is something else, so the caller can treat this as a filter
+/// rather than having to classify errors itself.
+pub fn on_usage_limit(
+    message: &str,
+    thread: ai_accounts::ThreadRef,
+    cx: &mut App,
+) -> Option<LimitAction> {
+    if !ai_accounts::looks_like_usage_limit(message) {
+        return None;
+    }
+
+    let now = Utc::now();
+    let offset = *chrono::Local::now().offset();
+    // A message we cannot read the time out of still gets a resume — the policy falls back to a
+    // whole window. A late resume is recoverable; a lost one is not.
+    let reset_hint = ai_accounts::parse_reset_time(message, now, offset);
+
+    let index = ai_accounts::load_index();
+    let agent_id = ai_accounts::CLAUDE_CODE_DESCRIPTOR.agent_id;
+    let exhausted = index.default_for_agent(agent_id)?.id.clone();
+    let accounts = ai_accounts::accounts_with_usage(&index, agent_id);
+
+    let decision = ai_accounts::choose_after_limit(
+        &accounts,
+        &exhausted,
+        reset_hint,
+        ai_accounts::DEFAULT_HEADROOM_THRESHOLD,
+        now,
+    )?;
+
+    match decision {
+        ai_accounts::LimitResponse::Switch { account } => {
+            let mut index = ai_accounts::load_index();
+            if let Err(error) = index
+                .set_default(agent_id, Some(account.id.clone()))
+                .and_then(|()| ai_accounts::save_index(&index))
+            {
+                log::error!("scheduled_followups: could not switch account: {error:#}");
+                return None;
+            }
+            log::info!(
+                "scheduled_followups: usage limit hit, switching to {}",
+                account.display_name
+            );
+            schedule(
+                usage_limit_followup(
+                    thread,
+                    now + SWITCH_GRACE,
+                    Some(account.id.clone()),
+                    Some(format!("Switched to {} after a usage limit", account.display_name)),
+                ),
+                cx,
+            );
+            Some(LimitAction::Switched {
+                account: account.display_name.into(),
+            })
+        }
+        ai_accounts::LimitResponse::Wait {
+            account,
+            resume_at,
+        } => {
+            log::info!(
+                "scheduled_followups: usage limit hit, resuming on {} at {resume_at}",
+                account.display_name
+            );
+            schedule(
+                usage_limit_followup(
+                    thread,
+                    resume_at,
+                    Some(account.id.clone()),
+                    Some(format!(
+                        "Waiting for {} to reset",
+                        account.display_name
+                    )),
+                ),
+                cx,
+            );
+            Some(LimitAction::Waiting {
+                account: account.display_name.into(),
+                resume_at,
+            })
+        }
     }
 }
 

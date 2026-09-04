@@ -1857,6 +1857,21 @@ impl ThreadView {
     ) {
         let error = error.into();
         self.emit_thread_error_telemetry(&error, cx);
+
+        // A usage limit is not a dead end: either another account has allowance, or this one
+        // will regain it. Either way the turn can be picked up again without the user watching
+        // for it.
+        if let Some(text) = error.usage_limit_text() {
+            let thread = ai_accounts::ThreadRef {
+                thread_id: self
+                    .server_view
+                    .read_with(cx, |view, _| view.thread_id.to_key_string())
+                    .ok(),
+                session_id: Some(self.session_id.to_string()),
+            };
+            crate::scheduled_followups::on_usage_limit(&text, thread, cx);
+        }
+
         self.thread_error = Some(error);
         cx.notify();
     }
