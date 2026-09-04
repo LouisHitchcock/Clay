@@ -36,6 +36,7 @@ agent_settings.workspace = true
 agent_skills.workspace = true
 ai_onboarding.workspace = true
 ai_accounts.workspace = true
+ui_input.workspace = true
 anyhow.workspace = true
 heapless.workspace = true
 audio = { workspace = true, optional = true }

@@ -29,7 +29,7 @@ Legend: **Done** · **Active** (in progress now) · **Next** (immediately after 
 | **M3** | Finish the rebrand: remaining Zed branding in the UI | **Mostly done** — app chrome swept; `ZED_*` in `script/`/`.github/` and the tagline outstanding |
 | **M4** | Clay icons everywhere — app, tray, installer, in-app | **Mostly done** — app/tray icons and the in-app logo shipped; macOS `.icns`, packaging and the AI feature glyphs outstanding |
 | **M5** | AI account switcher | **In progress** — crate ported, cc-switch importer written; spawn wiring and UI next |
-| **M6** | Continue-after-credit-reset scheduling | **Planned** |
+| **M6** | Continue-after-credit-reset scheduling | **Done** — awaiting a real limit message to confirm the parser |
 | **M7** | Unified AI terminal | **Planned** |
 | **M8** | Rest of the Lathe port — `pr_ui`, workspace groups | **Planned** |
 | **M9** | Integration between browser, terminal and editor | **Planned** — deliberately last |
@@ -375,6 +375,36 @@ newly bound account has no effect on a running subprocess. The resume path there
 connection so the next request spawns fresh — whenever a follow-up carries an account. Done for
 every such follow-up rather than only after a switch: a process idle for hours is worth replacing
 anyway, and guessing which account the live one started with would be fragile.
+
+### Manual scheduling and visibility
+
+Both live in the account picker, since it is already the visible home for accounts and usage:
+
+- **A "Scheduled" section** listing each pending follow-up as `17:07 — <note or prompt>`.
+  Clicking one cancels it. Cancelling by writing the file alone is sufficient: the runtime
+  re-reads before firing and finds nothing, so no notification is needed.
+- **"Schedule a message…"** dispatches `zed_actions::agent::ScheduleFollowUp`. An **action**
+  rather than a direct call because `title_bar` and `agent_ui` do not depend on each other, and
+  an action is how Zed decouples surfaces — the modal then lives in `agent_ui`, where the active
+  thread is already known.
+
+`ScheduleFollowUpModal` takes a message and a time. `followups::parse_when` accepts a clock time
+(`15:00`, `3pm`) meaning its next occurrence, or a relative duration (`90m`, `2h`, `2h30m`), with
+an optional leading "in" — both because both are natural depending on what the user knows.
+Durations are tried first, since `2h` would otherwise read as the clock hour 2, and ambiguous
+input like `2h30` is refused rather than guessed at. Scheduling goes through the runtime rather
+than the file so the timer re-arms; writing the file alone would leave the message sitting there
+until the next window opened.
+
+With no thread to attach to, the modal says so and disables the button instead of accepting a
+follow-up that could never fire.
+
+Verified on screen: the action appears in the command palette, the modal opens with both fields,
+and a pending follow-up shows in the picker with its time and note.
+
+**The resume path is confirmed working**, discovered incidentally — the smoke test's follow-up
+opened a thread, sent "Continue from where you left off.", and the agent replied that it had no
+prior context. Better evidence than the timer alone.
 
 **What is still unverified:** the actual limit message. The patterns in
 `ai_accounts::limit_message` are educated guesses, and the wording is the one thing that cannot

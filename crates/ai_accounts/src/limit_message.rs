@@ -82,7 +82,20 @@ fn parse_clock_time(
     // Code's phrasings all put the time after that word: "resets at", "will reset at", "reset
     // at".
     let after_reset = lowered.split("reset").nth(1)?;
-    let time = find_clock_time(after_reset)?;
+    next_occurrence_of_clock_time(after_reset, now, offset)
+}
+
+/// The next time `text`'s clock time comes round, in `offset`.
+///
+/// Shared with the manual scheduler, where the user types a time directly rather than it being
+/// quoted back by an agent.
+pub fn next_occurrence_of_clock_time(
+    text: &str,
+    now: DateTime<Utc>,
+    offset: FixedOffset,
+) -> Option<DateTime<Utc>> {
+    let lowered = text.to_ascii_lowercase();
+    let time = find_clock_time(&lowered)?;
 
     let local_now = now.with_timezone(&offset);
     let today = local_now.date_naive();

@@ -23,6 +23,7 @@ mod message_editor;
 mod mode_selector;
 mod model_selector;
 mod model_selector_popover;
+pub mod schedule_followup_modal;
 pub mod scheduled_followups;
 mod profile_selector;
 mod terminal_codegen;
@@ -655,6 +656,10 @@ pub fn init(
     })
     .detach();
     cx.observe_new(ManageProfilesModal::register).detach();
+    cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
+        schedule_followup_modal::ScheduleFollowUpModal::register(workspace);
+    })
+    .detach();
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
             |workspace: &mut Workspace,

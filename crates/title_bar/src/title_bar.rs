@@ -1353,6 +1353,48 @@ impl TitleBar {
                             }),
                     );
 
+                    // A queued resume is invisible otherwise, and an automatic one the user did
+                    // not ask for is exactly the thing they need to be able to see and undo.
+                    let scheduled = ai_accounts::followups::load();
+                    if !scheduled.pending.is_empty() {
+                        menu = menu.separator().header("Scheduled");
+                    }
+                    for followup in scheduled.pending {
+                        let when = followup
+                            .resume_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M")
+                            .to_string();
+                        let label = match followup.note.as_deref() {
+                            Some(note) => format!("{when} — {note}"),
+                            None => format!("{when} — {}", followup.prompt),
+                        };
+                        let id = followup.id.clone();
+                        menu = menu.item(
+                            ContextMenuEntry::new(label)
+                                .icon(IconName::CountdownTimer)
+                                .icon_color(Color::Muted)
+                                .handler(move |_, _| {
+                                    // Clicking cancels: writing the file is enough, because the
+                                    // runtime re-reads it before firing and will find nothing.
+                                    let mut scheduled = ai_accounts::followups::load();
+                                    scheduled.remove(&id);
+                                    if let Err(error) = ai_accounts::followups::save(&scheduled) {
+                                        log::error!(
+                                            "ai_accounts: could not cancel follow-up: {error:#}"
+                                        );
+                                    }
+                                }),
+                        );
+                    }
+
+                    menu = menu.separator();
+                    menu = menu.item(
+                        ContextMenuEntry::new("Schedule a message…")
+                            .icon(IconName::CountdownTimer)
+                            .action(zed_actions::agent::ScheduleFollowUp.boxed_clone()),
+                    );
+
                     menu.entry("Import from cc-switch", None, |_, cx| {
                         match ai_accounts::import_from_cc_switch() {
                             Ok(report) => log::info!(

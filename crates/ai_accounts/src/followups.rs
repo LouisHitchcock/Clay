@@ -151,6 +151,60 @@ impl FollowUps {
     }
 }
 
+/// Reads a time the user typed into the scheduler.
+///
+/// Accepts a clock time (`15:00`, `3pm`) meaning its next occurrence, or a relative duration
+/// (`90m`, `2h`, `2h30m`), with an optional leading "in". Both forms are supported because both
+/// are natural depending on what the user knows: "when my limit resets" is a clock time, "give
+/// it two hours" is a duration.
+pub fn parse_when(
+    input: &str,
+    now: DateTime<Utc>,
+    offset: chrono::FixedOffset,
+) -> Option<DateTime<Utc>> {
+    let input = input.trim().to_ascii_lowercase();
+    let input = input.strip_prefix("in ").unwrap_or(&input).trim();
+    if input.is_empty() {
+        return None;
+    }
+
+    // A relative duration is tried first: "2h" would otherwise read as the clock hour 2.
+    if let Some(delta) = parse_duration(input) {
+        return Some(now + delta);
+    }
+
+    crate::limit_message::next_occurrence_of_clock_time(input, now, offset)
+}
+
+/// `90m`, `2h`, `2h30m` as a duration. `None` if the whole input is not exactly that shape.
+fn parse_duration(input: &str) -> Option<chrono::TimeDelta> {
+    let mut total = chrono::TimeDelta::zero();
+    let mut digits = String::new();
+    let mut saw_unit = false;
+
+    for character in input.chars() {
+        match character {
+            '0'..='9' => digits.push(character),
+            'h' | 'm' => {
+                let value: i64 = digits.parse().ok()?;
+                digits.clear();
+                total += if character == 'h' {
+                    chrono::TimeDelta::try_hours(value)?
+                } else {
+                    chrono::TimeDelta::try_minutes(value)?
+                };
+                saw_unit = true;
+            }
+            ' ' => {}
+            // Anything else — a colon, a meridiem — means this is a clock time, not a duration.
+            _ => return None,
+        }
+    }
+
+    // Trailing digits with no unit ("2h30") are ambiguous, so refuse rather than guess.
+    (saw_unit && digits.is_empty() && total > chrono::TimeDelta::zero()).then_some(total)
+}
+
 fn followups_path() -> PathBuf {
     paths::config_dir().join("scheduled_followups.json")
 }
@@ -311,6 +365,53 @@ mod tests {
             serde_json::from_str::<FollowUps>(&json).unwrap(),
             followups
         );
+    }
+
+    fn london() -> chrono::FixedOffset {
+        chrono::FixedOffset::east_opt(60 * 60).unwrap()
+    }
+
+    #[test]
+    fn reads_relative_durations() {
+        let now = at(10_000);
+        assert_eq!(parse_when("90m", now, london()), Some(at(10_000 + 5_400)));
+        assert_eq!(parse_when("2h", now, london()), Some(at(10_000 + 7_200)));
+        assert_eq!(
+            parse_when("2h30m", now, london()),
+            Some(at(10_000 + 9_000))
+        );
+        // "in" reads naturally and should not change the meaning.
+        assert_eq!(parse_when("in 90m", now, london()), Some(at(10_000 + 5_400)));
+    }
+
+    #[test]
+    fn reads_clock_times() {
+        // 1970-01-01T02:46:40Z, so 15:00 London is later the same day.
+        let now = at(10_000);
+        let fifteen_hundred = chrono::DateTime::parse_from_rfc3339("1970-01-01T14:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(parse_when("15:00", now, london()), Some(fifteen_hundred));
+        assert_eq!(parse_when("3pm", now, london()), Some(fifteen_hundred));
+    }
+
+    #[test]
+    fn a_duration_is_not_mistaken_for_a_clock_hour() {
+        // "2h" must mean two hours from now, not 02:00 tomorrow.
+        let now = at(10_000);
+        assert_eq!(parse_when("2h", now, london()), Some(at(10_000 + 7_200)));
+    }
+
+    #[test]
+    fn refuses_input_it_cannot_read() {
+        let now = at(10_000);
+        assert_eq!(parse_when("", now, london()), None);
+        assert_eq!(parse_when("   ", now, london()), None);
+        assert_eq!(parse_when("soonish", now, london()), None);
+        // Trailing digits with no unit are ambiguous rather than 2h30m.
+        assert_eq!(parse_when("2h30", now, london()), None);
+        // Zero would schedule something that fires instantly, which is not what anyone means.
+        assert_eq!(parse_when("0m", now, london()), None);
     }
 
     #[test]
