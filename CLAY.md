@@ -168,12 +168,33 @@ state in place (hence the `.bak-<timestamp>` files next to
 
    Verified end to end: import found `dronetech` and `personal`, skipped the `.bak-` file,
    selecting one ticked it and changed the button label, and the choice survived reopening.
-5. **System-wide action — next.** The cc-switch credential write, for shells outside Clay.
+5. **System-wide action — done.** `make_system_wide()` writes the account's credentials into
+   `~/.claude/.credentials.json`, after copying the existing ones to
+   `.credentials.json.bak-<timestamp>` — cc-switch's own backup naming, so the two are
+   recognisable as the same convention. Offered only for the *active* account: promoting a
+   non-active one would leave Clay and the shell pointing at different identities, which is
+   exactly the confusion this is meant to avoid.
+6. **Brand icons — done.** `AgentDescriptor` gained `brand_icon: IconName`
+   (`AiClaude` / `AiGemini` / `AiOpenAi`), so accounts stay distinguishable once more than one
+   provider is configured. `crates/icons` is dependency-free, so the descriptor can own the icon
+   rather than the UI mapping agent IDs to glyphs.
+
+### Why the account rows are custom entries
+
+`ContextMenuEntry`'s `icon` doubles as the toggle glyph — the toggle slot renders
+`icon.unwrap_or(IconName::Check)`. So a toggleable entry with a brand icon shows the brand mark
+*twice* and never shows a tick. The first attempt at this "fixed" the leading-icon suppression in
+`crates/ui/src/components/context_menu.rs`, which was wrong: the suppression is deliberate,
+because the icon is supposed to move into the toggle slot.
+
+The account rows therefore use `ContextMenuItem::custom_entry` and lay themselves out explicitly
+— brand mark, name, spacer, tick. That also leaves shared `ui` code untouched, which matters more
+here than the convenience: merge friction is this project's dominant long-term cost.
 
 ### What the picker does not do yet
 
 - **Claude Code only.** The menu is hardcoded to `CLAUDE_CODE_DESCRIPTOR`; Gemini and Codex
-  accounts exist in the store but have no UI.
+  accounts exist in the store, with brand icons ready, but have no UI.
 - **No add-account flow.** Accounts can be imported and switched between, but creating one means
   going through `create_account` plus the agent's `LoginFlow` — not yet wired to a button.
 - **Sets the global default, not the workspace binding.** `AiAccountsSettings.bindings` is read

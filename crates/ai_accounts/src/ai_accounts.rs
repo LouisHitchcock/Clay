@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use collections::HashMap;
+use icons::IconName;
 use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsContent};
 use std::path::{Path, PathBuf};
@@ -224,6 +225,9 @@ pub struct AgentDescriptor {
     pub verify_command: &'static [&'static str],
     pub signup_url: &'static str,
     pub brand_accent: BrandAccent,
+    /// The provider's mark, shown beside accounts so several providers stay distinguishable
+    /// at a glance once more than one is configured.
+    pub brand_icon: IconName,
     /// Default environment variables injected at ACP spawn time, in addition
     /// to the per-account `config_dir_env_var`. These are protective defaults
     /// — e.g. disabling cloud-managed MCP servers that would otherwise block
@@ -252,6 +256,7 @@ pub const CLAUDE_CODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         light: "#cc6633",
         dark: "#e89968",
     },
+    brand_icon: IconName::AiClaude,
     // Default-off the claude.ai cloud connectors (Gmail/Calendar/Drive that
     // come down from a Claude Max account) so a user who hasn't OAuth'd
     // them doesn't get a hung ACP thread on first launch. Opt in by setting
@@ -291,6 +296,7 @@ pub const GEMINI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         light: "#4285f4",
         dark: "#7aa9f8",
     },
+    brand_icon: IconName::AiGemini,
     default_env: &[],
     // Nothing to scrub: with API-key auth the key IS the credential, so the
     // injected GEMINI_API_KEY must reach the subprocess. (The retired OAuth
@@ -311,6 +317,7 @@ pub const CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         light: "#10a37f",
         dark: "#2dc59a",
     },
+    brand_icon: IconName::AiOpenAi,
     default_env: &[],
     scrub_env: &[],
 };
@@ -662,6 +669,52 @@ pub fn import_from_claude_profiles() -> Result<AccountImport> {
         save_index(&index)?;
     }
     Ok(report)
+}
+
+/// Claude Code's own config directory, which a CLI started outside Clay reads.
+pub fn claude_config_dir() -> PathBuf {
+    util::paths::home_dir().join(".claude")
+}
+
+/// Makes `account` the one a Claude Code CLI started *outside* Clay will use.
+///
+/// Everything else about this feature avoids touching global state: an account is normally
+/// selected by pointing the agent at a different `CLAUDE_CONFIG_DIR`, which only affects
+/// processes Clay spawns. That deliberately cannot reach a shell the user opened themselves,
+/// so this does what cc-switch does and writes the credentials into `~/.claude` in place.
+///
+/// The previous credentials are copied to `.credentials.json.bak-<timestamp>` first, matching
+/// cc-switch's own backup naming so the two are recognisable as the same convention.
+///
+/// Returns the backup path when one was made.
+pub fn make_system_wide(account: &AiAccount) -> Result<Option<PathBuf>> {
+    let source = account.config_dir.join(".credentials.json");
+    anyhow::ensure!(
+        source.exists(),
+        "{} has no stored credentials yet — sign in to it first",
+        account.display_name
+    );
+
+    let config_dir = claude_config_dir();
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("creating {}", config_dir.display()))?;
+    let target = config_dir.join(".credentials.json");
+
+    // Back up whatever is there before overwriting it. Losing the user's current login to a
+    // mis-click is not an acceptable failure mode for a menu entry.
+    let backup = if target.exists() {
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S");
+        let backup = config_dir.join(format!(".credentials.json.bak-{stamp}"));
+        std::fs::copy(&target, &backup)
+            .with_context(|| format!("backing up {}", target.display()))?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    std::fs::copy(&source, &target)
+        .with_context(|| format!("writing {}", target.display()))?;
+    Ok(backup)
 }
 
 /// The directory the Claude Code Multi-Account Switcher keeps its saved accounts in.

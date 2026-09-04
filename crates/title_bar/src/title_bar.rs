@@ -47,10 +47,14 @@ use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, ContextMenuItem, DocumentationSide,
+    IconWithIndicator,
+    Indicator, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
+    utils::platform_title_bar_height,
 };
-use ai_accounts::{AiAccountsIndex, CLAUDE_CODE_DESCRIPTOR, load_index, save_index};
+use ai_accounts::{
+    AiAccountsIndex, CLAUDE_CODE_DESCRIPTOR, descriptor_for, load_index, save_index,
+};
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
@@ -1220,18 +1224,16 @@ impl TitleBar {
             .menu(move |window, cx| {
                 // Reload before building: the index is shared with the CLI and with Clay's other
                 // windows, so a cached copy can be stale by the time the menu is opened.
-                let (accounts, active_id) = this
+                let (accounts, active_account) = this
                     .update(cx, |this, _| {
                         this.ai_accounts = load_index();
-                        let active = this
-                            .ai_accounts
-                            .default_for_agent(agent_id)
-                            .map(|account| account.id.clone());
+                        let active = this.ai_accounts.default_for_agent(agent_id).cloned();
                         let accounts: Vec<_> =
                             this.ai_accounts.for_agent(agent_id).cloned().collect();
                         (accounts, active)
                     })
                     .ok()?;
+                let active_id = active_account.as_ref().map(|account| account.id.clone());
 
                 Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
                     if accounts.is_empty() {
@@ -1240,16 +1242,36 @@ impl TitleBar {
                     for account in accounts {
                         let is_active = active_id.as_deref() == Some(account.id.as_str());
                         let id = account.id.clone();
-                        menu = menu.toggleable_entry(
-                            account.display_name.clone(),
-                            is_active,
-                            IconPosition::Start,
-                            None,
+                        // The provider's mark, so several providers stay distinguishable once
+                        // Gemini and Codex accounts appear in the same list.
+                        let brand = descriptor_for(&account.agent_id)
+                            .map(|descriptor| descriptor.brand_icon)
+                            .unwrap_or(IconName::Person);
+                        let name: SharedString = account.display_name.clone().into();
+                        menu = menu.item(ContextMenuItem::custom_entry(
+                            move |_, _| {
+                                h_flex()
+                                    .w_full()
+                                    .gap_1p5()
+                                    .child(
+                                        Icon::new(brand)
+                                            .size(IconSize::Small)
+                                            .color(Color::Default),
+                                    )
+                                    .child(Label::new(name.clone()))
+                                    .child(div().flex_1())
+                                    .when(is_active, |row| {
+                                        row.child(
+                                            Icon::new(IconName::Check)
+                                                .size(IconSize::Small)
+                                                .color(Color::Accent),
+                                        )
+                                    })
+                                    .into_any_element()
+                            },
                             move |_, _| {
                                 let mut index = load_index();
-                                if let Err(error) =
-                                    index.set_default(agent_id, Some(id.clone()))
-                                {
+                                if let Err(error) = index.set_default(agent_id, Some(id.clone())) {
                                     log::error!("ai_accounts: could not switch account: {error:#}");
                                     return;
                                 }
@@ -1257,10 +1279,50 @@ impl TitleBar {
                                     log::error!("ai_accounts: could not save accounts: {error:#}");
                                 }
                             },
+                            None,
+                        ));
+                    }
+
+                    menu = menu.separator();
+
+                    // Only offered when there is something to promote, and only for the account
+                    // in use — promoting a non-active account would leave Clay and the shell
+                    // pointing at different identities, which is the confusion this avoids.
+                    if let Some(active) = active_account.clone() {
+                        menu = menu.item(
+                            ContextMenuEntry::new(format!(
+                                "Use \"{}\" outside Clay too",
+                                active.display_name
+                            ))
+                            .icon(IconName::Terminal)
+                            .documentation_aside(DocumentationSide::Left, |_| {
+                                    Label::new(
+                                        "Writes this account's credentials into ~/.claude so a \
+                                         Claude Code CLI started from any shell uses it too. \
+                                         The existing credentials are backed up first.",
+                                    )
+                                .into_any_element()
+                            })
+                            .handler(move |_, _| match ai_accounts::make_system_wide(&active) {
+                                Ok(Some(backup)) => log::info!(
+                                    "ai_accounts: {} is now the system-wide account; previous \
+                                     credentials backed up to {}",
+                                    active.display_name,
+                                    backup.display()
+                                ),
+                                Ok(None) => log::info!(
+                                    "ai_accounts: {} is now the system-wide account",
+                                    active.display_name
+                                ),
+                                Err(error) => log::error!(
+                                    "ai_accounts: could not make {} system-wide: {error:#}",
+                                    active.display_name
+                                ),
+                            }),
                         );
                     }
 
-                    menu.separator().entry("Import from cc-switch", None, |_, cx| {
+                    menu.entry("Import from cc-switch", None, |_, cx| {
                         match ai_accounts::import_from_cc_switch() {
                             Ok(report) => log::info!(
                                 "ai_accounts: imported {} account(s), skipped {}, failed {}",
