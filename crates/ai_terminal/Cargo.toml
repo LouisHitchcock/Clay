@@ -1,0 +1,16 @@
+[package]
+name = "ai_terminal"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/ai_terminal.rs"
+doctest = false
+
+[dependencies]
+chrono.workspace = true

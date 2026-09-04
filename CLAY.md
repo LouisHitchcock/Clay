@@ -488,6 +488,38 @@ a second repository in the maintenance path.
    and no new loop, but markers can leak into visible output and need filtering, and the approach
    is fragile with programs that redraw the screen.
 
+**Decided: option 1, an in-tree event loop that tees the bytes.** It keeps the recorded design,
+adds no second repository to maintain, and preserves a real shell session so state persists
+between blocks. The risk is concentrated in one place — reimplementing alacritty's PTY loop —
+rather than spread through the design.
+
+**Build order decided: input routing and the timeline first**, since both are independent of the
+shell-integration work and are the parts the user feels first.
+
+### Progress
+
+`crates/ai_terminal` is a new crate rather than an addition to `terminal` or `agent_ui`: it
+composes both, and keeping it separate holds Clay's additions out of the crates that see the most
+upstream churn.
+
+**Input routing — done** (`input.rs`, 10 tests). `!` routes to the shell verbatim, `/` to a
+command, everything else to the agent. Only a *leading* sigil counts, so `!` in prose stays
+usable. There is deliberately **no heuristic in routing at all** — that is what makes a silent
+mis-route impossible, and it is why `looks_like_shell_command` is documented as hint-only and
+tested to stay out of the decision. The hint is kept short and boring on purpose: a longer
+command list would fire on prose like "cargo is slow today", which is worse than missing a few.
+
+**Block model — done** (`timeline.rs`, 9 tests). One ordered timeline of shell, agent and
+command blocks, because the agent and the shell are two ways of doing the same job and their
+results belong in the same history. Two decisions worth keeping:
+
+- `finish` ignores a second completion, so a duplicate event cannot rewrite when something
+  actually ended, and `duration` stops growing once finished.
+- `ShellBlock::failure_context` is the "failure is not a dead end" piece: it hands the agent the
+  command, directory, exit code and output. It returns `None` for anything that has not failed,
+  so a success cannot be narrated as one, and it truncates from the *end* because a failing
+  command's last lines carry the error while its first are progress noise.
+
 ## M8 — Rest of the Lathe port
 
 `pr_ui` (~6.7k lines — real PR review, since upstream Zed is link-out only) and workspace groups

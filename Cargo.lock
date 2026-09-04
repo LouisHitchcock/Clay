@@ -634,6 +634,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_terminal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
 source = "git+https://github.com/zed-industries/alacritty?rev=4c129667ce56611becdc82de6e28218c80e2e88f#4c129667ce56611becdc82de6e28218c80e2e88f"

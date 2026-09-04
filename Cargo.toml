@@ -7,6 +7,7 @@ members = [
     "crates/activity_indicator",
     "crates/agent",
     "crates/ai_accounts",
+    "crates/ai_terminal",
     "crates/agent_servers",
     "crates/agent_settings",
     "crates/agent_skills",
@@ -285,6 +286,7 @@ action_log = { path = "crates/action_log" }
 activity_indicator = { path = "crates/activity_indicator" }
 agent = { path = "crates/agent" }
 ai_accounts = { path = "crates/ai_accounts" }
+ai_terminal = { path = "crates/ai_terminal" }
 agent_servers = { path = "crates/agent_servers" }
 agent_settings = { path = "crates/agent_settings" }
 agent_skills = { path = "crates/agent_skills" }
