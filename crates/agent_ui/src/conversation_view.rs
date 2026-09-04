@@ -1696,6 +1696,31 @@ impl ConversationView {
                 }
             }
             AcpThreadEvent::Stopped(stop_reason) => {
+                // Claude Code reports a usage limit as an ordinary assistant message and ends
+                // the turn normally — "You've hit your session limit · resets 5:20pm
+                // (Europe/London)" — so it never reaches the error path. Checking here is what
+                // actually catches it.
+                if !matches!(stop_reason, acp::StopReason::Cancelled) {
+                    let last_assistant_text = thread
+                        .read(cx)
+                        .entries()
+                        .iter()
+                        .rev()
+                        .find_map(|entry| match entry {
+                            acp_thread::AgentThreadEntry::AssistantMessage(message) => {
+                                Some(message.to_markdown(cx))
+                            }
+                            _ => None,
+                        });
+                    if let Some(text) = last_assistant_text {
+                        let thread_ref = ai_accounts::ThreadRef {
+                            thread_id: Some(self.thread_id.to_key_string()),
+                            session_id: Some(session_id.to_string()),
+                        };
+                        crate::scheduled_followups::on_usage_limit(&text, thread_ref, cx);
+                    }
+                }
+
                 if let Some(active) = self.thread_view(&session_id) {
                     let is_generating =
                         matches!(thread.read(cx).status(), ThreadStatus::Generating);

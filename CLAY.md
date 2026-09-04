@@ -406,7 +406,33 @@ and a pending follow-up shows in the picker with its time and note.
 opened a thread, sent "Continue from where you left off.", and the agent replied that it had no
 prior context. Better evidence than the timer alone.
 
-**What is still unverified:** the actual limit message. The patterns in
+### The real limit message (captured 2026-09-04) — and both guesses it disproved
+
+```
+You've hit your session limit · resets 5:20pm (Europe/London)
+```
+
+Two things were wrong, one of which would have stopped the feature working entirely.
+
+1. **The phrase is "session limit", not "usage limit".** None of the original patterns matched:
+   the closest, `"limit hit"`, is the reverse word order of "hit your session limit". Detection
+   would silently never have fired. Fixed, with both word orders now covered and the verbatim
+   message kept as a test constant.
+2. **It arrives as an assistant message, not an error.** The `## Assistant` heading in the
+   captured text is `AssistantMessage::to_markdown`'s own format, so the limit notice is ordinary
+   assistant content and the turn ends normally — `handle_thread_error` never sees it. The check
+   now also runs in `ConversationView`'s `AcpThreadEvent::Stopped` arm, reading the last
+   assistant message. The error hook is kept for providers that do report a limit as an error;
+   both routes converge on `on_usage_limit`, and the one-pending-resume-per-thread rule makes a
+   double fire harmless.
+
+What did survive contact: **the time parsing was already right.** "resets 5:20pm" has no "at"
+after "resets", and the parser anchors on "reset" rather than a fixed phrase, so it reads 17:20
+local without changes. The named zone is ignored as documented, which is correct here because it
+is the user's own.
+
+The lesson worth keeping is the one the fallback was designed around: the wording was the part
+that could not be reasoned out, and it was wrong in a way no amount of care would have caught. The patterns in
 `ai_accounts::limit_message` are educated guesses, and the wording is the one thing that cannot
 be checked without hitting a real limit. Everything downstream of it is exercised and the
 fallback is deliberate: an unreadable message still schedules a resume, just for a whole window

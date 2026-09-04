@@ -18,15 +18,21 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveTime, TimeZone, Utc};
 /// be treated as a limit.
 pub fn looks_like_usage_limit(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    let mentions_limit = message.contains("usage limit")
+    // "session limit" is the wording Claude Code actually uses — confirmed against a real
+    // message on 2026-09-04: "You've hit your session limit · resets 5:20pm (Europe/London)".
+    // The others are kept for other providers and for wordings this one may take in future.
+    message.contains("session limit")
+        || message.contains("usage limit")
         || message.contains("rate limit")
+        // Both word orders: "limit reached" and "reached your limit" are both in the wild.
         || message.contains("limit reached")
         || message.contains("limit hit")
+        || message.contains("hit your limit")
+        || message.contains("reached your limit")
         || message.contains("out of credits")
-        || message.contains("credit balance");
-    // "limit" on its own catches far too much — tool-call limits, token limits, and any prose
-    // the model happens to write about limits.
-    mentions_limit
+        || message.contains("credit balance")
+    // "limit" on its own is deliberately not enough — it catches tool-call limits, token
+    // limits, and any prose the model happens to write about limits.
 }
 
 /// Reads the moment a limit lifts out of `message`, if it says.
@@ -186,6 +192,29 @@ mod tests {
 
     fn london() -> FixedOffset {
         FixedOffset::east_opt(60 * 60).unwrap()
+    }
+
+    /// The message Claude Code actually produces, captured verbatim on 2026-09-04.
+    ///
+    /// Worth keeping exact: the wording is the one part of this that cannot be reasoned out, and
+    /// the first guess at it was wrong — "session limit" matched none of the original patterns.
+    const REAL_LIMIT_MESSAGE: &str =
+        "You've hit your session limit · resets 5:20pm (Europe/London)";
+
+    #[test]
+    fn recognises_the_real_limit_message() {
+        assert!(looks_like_usage_limit(REAL_LIMIT_MESSAGE));
+    }
+
+    #[test]
+    fn reads_the_reset_time_out_of_the_real_message() {
+        // Note there is no "at" after "resets", and the zone is named in brackets.
+        let now = utc(2026, 9, 4, 12, 0);
+        assert_eq!(
+            parse_reset_time(REAL_LIMIT_MESSAGE, now, london()),
+            // 17:20 London is 16:20 UTC.
+            Some(utc(2026, 9, 4, 16, 20))
+        );
     }
 
     #[test]
