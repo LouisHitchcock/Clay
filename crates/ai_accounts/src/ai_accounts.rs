@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsContent};
 use std::path::{Path, PathBuf};
 
+pub mod followups;
 pub mod limit_message;
 pub mod policy;
 pub mod usage;
+pub use followups::{FollowUp, FollowUpReason, FollowUps, ThreadRef};
 pub use limit_message::{looks_like_usage_limit, parse_reset_time};
 pub use policy::{DEFAULT_HEADROOM_THRESHOLD, LimitResponse, accounts_with_usage, choose_after_limit};
 pub use usage::{AccountUsage, SESSION_WINDOW, read_usage};

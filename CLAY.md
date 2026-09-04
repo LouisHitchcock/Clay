@@ -322,10 +322,39 @@ genuinely per-account. Two consequences to handle:
    time earlier in the message is not mistaken for one, and it rejects a timestamp in the past so
    a replayed message cannot schedule a resume that fires instantly. `looks_like_usage_limit` is
    separate from parsing, because a limit with an unreadable time is still a limit.
-4. **Scheduler core — next.** Persisted follow-ups, wake-up, re-send into the same thread, and
-   the manual entry point.
+4. **Scheduler core — done.** `ai_accounts::followups` is the persisted store and the timing
+   rules; `agent_ui::scheduled_followups` is the runtime that arms a timer, reopens the thread
+   and sends.
 
-62 tests cover the three finished pieces. Two shortcomings are deliberate and documented in the
+   Verified end to end by writing a follow-up due in 40 seconds and watching it arm with the
+   right wake time, re-check at the sleep boundary, fire when due, and persist its own removal.
+
+   Decisions worth keeping:
+
+   - **One global, not one per window.** A follow-up belongs to a conversation, so several
+     windows each firing it would send the prompt twice. The runtime re-reads the file
+     immediately before firing and removes the entry *before* sending, so a second window waking
+     at the same moment finds nothing to do — and a crash mid-send cannot leave an entry that
+     fires again on every startup for ever.
+   - **A long wait is not one long sleep.** Sleeps are capped at 60 seconds and the wall clock is
+     re-checked each time, because a machine that suspends mid-wait would otherwise overshoot by
+     however long it was asleep.
+   - **One pending resume per thread.** Scheduling again for the same conversation moves the
+     appointment rather than stacking messages that all fire into it.
+   - **The turn is detached, not awaited.** A resumed turn can run for minutes and holding the
+     scheduler open would delay everything behind it.
+   - **Opening a thread can hit storage,** so the runtime polls for the panel's
+     `active_thread_id` to match rather than assuming the view is there on the next tick.
+
+   `ThreadId` gained `from_key_string` to read back what `to_key_string` writes.
+
+74 tests cover the finished pieces.
+
+One debugging round worth recording: the scheduler appeared not to fire, and the cause was the
+test file — PowerShell's `Out-File -Encoding utf8` writes a **byte-order mark**, which
+`serde_json` rejects, so the store loaded nothing and said so only in the buffered log. `load`
+now strips a BOM, since any Windows tool might add one and a schedule quietly vanishing is a bad
+failure. Pinned by a test. Two shortcomings are deliberate and documented in the
 code: a named zone in the message is read in the local offset rather than mapped, and the exact
 wording is **still unverified against a real limit message** — which is exactly why a parse
 failure falls back to a whole window instead of dropping the resume.

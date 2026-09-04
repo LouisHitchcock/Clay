@@ -23,6 +23,7 @@ mod message_editor;
 mod mode_selector;
 mod model_selector;
 mod model_selector_popover;
+pub mod scheduled_followups;
 mod profile_selector;
 mod terminal_codegen;
 mod terminal_inline_assistant;
@@ -588,6 +589,7 @@ pub fn init(
 ) {
     agent::ThreadStore::init_global(cx);
     prompt_store::init(cx);
+    scheduled_followups::init(cx);
 
     cx.set_global(agent_skills::SkillsUpdatedHook(std::rc::Rc::new(|cx| {
         let workspaces: Vec<_> = workspace::AppState::global(cx)
