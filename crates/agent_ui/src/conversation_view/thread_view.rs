@@ -1665,9 +1665,16 @@ impl ThreadView {
                 .log_err();
         });
 
+        // Tool calls collapse by default, which is right for a call the model made and wrong for
+        // one the user typed: the output is the reason they ran it. Still collapsible, so a long
+        // build log can be folded away again.
+        self.entry_view_state.update(cx, |entry_view_state, _| {
+            entry_view_state.expand_tool_call(tool_call_id.clone());
+        });
+
         let spawn_command = command.clone();
         let spawn_cwd = cwd.clone();
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn_in(window, async move |_this, cx| {
             let finished = cx
                 .background_spawn(async move { run_shell(&spawn_command, spawn_cwd.as_deref()).await })
                 .await;
@@ -1704,26 +1711,11 @@ impl ThreadView {
                         .log_err();
                 });
 
-            // A failure is not a dead end: the command, its directory, exit code and output go
-            // to the agent so it can suggest a correction, rather than leaving the user to copy
-            // the error out and explain it.
-            if let Ok(block) = finished
-                && let Some(context) = block.failure_context(SHELL_FAILURE_CONTEXT_BYTES)
-            {
-                this.update_in(cx, |this, window, cx| {
-                    let message_editor = this.message_editor.clone();
-                    // Only into an empty editor. The context is offered as a draft to send, not
-                    // forced: clobbering something the user was part-way through typing would be
-                    // a poor trade for a convenience, and the tool-call block already shows the
-                    // failure either way.
-                    if message_editor.read(cx).is_empty(cx) {
-                        message_editor.update(cx, |message_editor, cx| {
-                            message_editor.insert_text(&context, window, cx);
-                        });
-                    }
-                })
-                .ok();
-            }
+            // Nothing more to do for a failure. The command is a tool-call entry in this thread,
+            // so the agent already has its output as context on the next turn — which is what
+            // putting shell commands in the agent's own timeline buys, and why this does not
+            // need to push anything into the user's input box.
+            let _ = finished;
         })
         .detach();
     }
@@ -13102,12 +13094,6 @@ pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {
     })
     .detach();
 }
-
-/// How much of a failed command's output to hand the agent.
-///
-/// Enough for a compiler error or a stack trace, short of pasting an entire build log into the
-/// conversation.
-const SHELL_FAILURE_CONTEXT_BYTES: usize = 4096;
 
 /// Runs `command` through the system shell and collects what it did.
 async fn run_shell(

@@ -563,26 +563,35 @@ Decisions worth keeping:
   the editor.
 - **stdout and stderr are joined**, in the order a terminal would have shown them, because a
   block is meant to show what the command printed rather than two separate streams.
-- **Failure context goes into the editor only when it is empty.** It is offered as a draft to
-  send, not forced — clobbering something half-typed would be a poor trade, and the block shows
-  the failure regardless. `MessageEditor::set_text` is test-only, so this uses `insert_text`,
-  which suits the rule anyway.
+- **Output lives in the block, and shell blocks are expanded on creation.** Tool calls collapse
+  by default, which is right for a call the model made and wrong for one the user typed: the
+  output is the reason they ran it. `entry_view_state.expand_tool_call` opens it, and it stays
+  collapsible so a long build log can be folded away. This is the Warp model — one block per
+  command carrying its own output, expandable for detail.
 
-Known rough edge: **tool-call output is collapsed by default.** `is_open` comes from
-`entry_view_state.is_tool_call_expanded`, so a shell block shows its command with the output one
-click away. For a `!` command the output is the whole point, so expanding these by default is the
-obvious next polish.
+#### A wrong turn: drafting the failure into the message editor
+
+The first version wrote a failed command's context into the user's input box as a draft to send.
+Louis corrected it: command output belongs in the chat as part of the block, not where the user
+types.
+
+He was right twice over, because it was also **redundant**. The command is a tool-call entry in
+the thread, so the agent already has its output as context on the next turn — that is precisely
+what putting shell commands in the agent's own timeline buys. Nothing needs pushing into the
+input at all. `ShellBlock::failure_context` remains in `ai_terminal` and tested, but is no longer
+called from here.
 
 ### What is left in M7
 
-1. **Expand shell blocks by default**, per above.
-2. **The in-tree event loop** — the chosen route to real shell integration, and the riskiest
+1. **The in-tree event loop** — the chosen route to real shell integration, and the riskiest
    piece. Build it behind the existing `spawn_event_loop` seam so the current path stays
    switchable. Note that what exists now runs each `!` command as its own process, so shell state
    does not persist between blocks: `!cd foo` then `!ls` will not be in `foo`. That is precisely
-   what the event loop fixes.
-3. **App commands** — project and workspace navigation, settings, session control. `/` already
+   what the event loop fixes, and it is the biggest remaining gap against Warp.
+2. **App commands** — project and workspace navigation, settings, session control. `/` already
    routes; nothing consumes it yet.
+3. **Warp parity items not yet started**: rerunning a block, copying a block's output, and
+   navigating between blocks by keyboard.
 
 Worth keeping from the discarded surface: `Focusable::focus_handle` must return the *input's*
 handle, not the container's. Returning the container's meant activating the view focused nothing
