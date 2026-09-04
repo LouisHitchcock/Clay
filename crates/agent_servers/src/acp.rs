@@ -1263,7 +1263,7 @@ impl AcpConnection {
             let task = pending.task.clone();
             return cx
                 .foreground_executor()
-                .spawn(async move { task.await.map_err(|err| anyhow!(err)) });
+                .spawn(async move { task.await.map_err(unshare_error) });
         }
 
         if let Some(session) = self.sessions.borrow_mut().get_mut(&session_id) {
@@ -1371,7 +1371,7 @@ impl AcpConnection {
         );
 
         cx.foreground_executor()
-            .spawn(async move { shared_task.await.map_err(|err| anyhow!(err)) })
+            .spawn(async move { shared_task.await.map_err(unshare_error) })
     }
 
     fn apply_default_config_options(
@@ -2145,6 +2145,37 @@ impl AgentConnection for AcpConnection {
     }
 }
 
+/// Flattens the `Arc` a shared task forces onto its error, keeping the concrete type intact.
+///
+/// [`AcpConnection::open_or_create_session`] shares one load task between concurrent callers,
+/// and a `Shared` future needs a cloneable error, so a failure is carried as
+/// `Arc<anyhow::Error>`. Handing that straight to `anyhow!` silently reduces it to its `Display`
+/// text, because `Arc<anyhow::Error>` is not itself an `Error` — and the callers downcast:
+/// `ConversationView` looks for [`AuthRequired`] to start the login flow, and for
+/// [`acp::Error`] to recognise a session the agent has forgotten and start a fresh thread
+/// instead. With the type gone both fell through to a bare "Failed to Launch", showing the user
+/// a raw protocol message with no way forward.
+///
+/// The types that are matched on downstream are lifted back out by value; anything else keeps
+/// only its message, which is all a generic failure needs.
+fn unshare_error(error: Arc<anyhow::Error>) -> anyhow::Error {
+    if let Some(auth_required) = error.downcast_ref::<AuthRequired>() {
+        // Not `Clone`, but it carries a single optional description.
+        let mut rebuilt = AuthRequired::new();
+        if let Some(description) = &auth_required.description {
+            rebuilt = rebuilt.with_description(description.clone());
+        }
+        return anyhow!(rebuilt);
+    }
+    if let Some(load_error) = error.downcast_ref::<LoadError>() {
+        return anyhow!(load_error.clone());
+    }
+    if let Some(acp_error) = error.downcast_ref::<acp::Error>() {
+        return anyhow!(acp_error.clone());
+    }
+    anyhow!(error)
+}
+
 fn map_acp_error(err: acp::Error) -> anyhow::Error {
     if err.code == acp::ErrorCode::AuthRequired {
         let mut error = AuthRequired::new();
@@ -2789,6 +2820,43 @@ mod tests {
             cx.set_global(settings_store);
             cx.update_flags(false, vec![]);
         });
+    }
+
+    /// The whole point of [`unshare_error`]: a shared task's `Arc` must not eat the error type.
+    ///
+    /// Regression test. `anyhow!(arc)` compiles perfectly happily and produces an error whose
+    /// message is exactly right, so the loss is invisible until a caller's `downcast_ref`
+    /// quietly stops matching. That is how a forgotten session came to be shown to the user as
+    /// a bare "Resource not found: <uuid>" with no recovery.
+    #[test]
+    fn unshared_errors_can_still_be_downcast() {
+        let acp_error = acp::Error::resource_not_found(Some("session-id".to_string()));
+        let unshared = unshare_error(Arc::new(anyhow!(acp_error)));
+        let recovered = unshared
+            .downcast_ref::<acp::Error>()
+            .expect("the acp error should survive being shared");
+        assert_eq!(recovered.code, acp::ErrorCode::ResourceNotFound);
+
+        let unshared = unshare_error(Arc::new(anyhow!(
+            AuthRequired::new().with_description("log in".to_string())
+        )));
+        let recovered = unshared
+            .downcast_ref::<AuthRequired>()
+            .expect("the auth-required marker should survive being shared");
+        assert_eq!(recovered.description.as_deref(), Some("log in"));
+
+        let unshared = unshare_error(Arc::new(anyhow!(LoadError::Other("boom".into()))));
+        assert!(
+            unshared.downcast_ref::<LoadError>().is_some(),
+            "the load error should survive being shared"
+        );
+    }
+
+    /// An error with no type worth keeping still has to arrive readable.
+    #[test]
+    fn an_unshared_error_of_no_known_type_keeps_its_message() {
+        let unshared = unshare_error(Arc::new(anyhow!("something went wrong")));
+        assert_eq!(unshared.to_string(), "something went wrong");
     }
 
     #[gpui::test]

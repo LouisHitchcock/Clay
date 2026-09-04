@@ -657,6 +657,25 @@ forward.
 end of that session's life — Claude Code's do not live forever — so it is not a fault worth
 showing.
 
+**That fallback did not fire, and the reason is the more interesting bug.**
+`AcpConnection::open_or_create_session` shares one load task between concurrent callers, and a
+`Shared` future needs a cloneable error, so failures travel as `Arc<anyhow::Error>`. It was
+unwrapped with `map_err(|err| anyhow!(err))` — which compiles, and produces an error whose
+*message* is exactly right, but `Arc<anyhow::Error>` is not itself an `Error`, so `anyhow!`
+falls back to building an ad-hoc error from `Display`. The concrete type is discarded. Every
+`downcast_ref` downstream then silently stopped matching.
+
+`unshare_error` replaces it, lifting `AuthRequired`, `LoadError` and `acp::Error` back out by
+value before falling back to the message. This fixes two symptoms at once: the forgotten-session
+fallback, and `AuthRequired` on a resume, which had been showing up as
+"Failed to Launch: Authentication required" instead of starting the login flow — a symptom
+already noted in a comment in `ai_accounts.rs` without its cause being understood.
+
+The lesson worth keeping: **`anyhow!(x)` silently degrades to `Display` when `x` is not an
+`Error`**, and a wrapper type like `Arc<anyhow::Error>` is exactly that case. The message looks
+perfect, so the loss is invisible until a downcast far away stops matching. Two tests in
+`acp.rs` now pin it.
+
 **How it arose is worth recording as a caution:** testing the follow-up scheduler against
 Louis's real profile created throwaway agent threads, one of which became `last_active_thread`
 and then stopped existing, leaving a dangling pointer. Scratch data written into a live profile
