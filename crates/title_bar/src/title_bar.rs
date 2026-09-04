@@ -1,3 +1,4 @@
+mod ai_account_modal;
 mod application_menu;
 pub mod collab;
 mod onboarding_banner;
@@ -52,6 +53,7 @@ use ui::{
     Indicator, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
     utils::platform_title_bar_height,
 };
+use crate::ai_account_modal::AddAiAccountModal;
 use ai_accounts::{
     AiAccountsIndex, CLAUDE_CODE_DESCRIPTOR, descriptor_for, load_index, save_index,
 };
@@ -1219,6 +1221,7 @@ impl TitleBar {
         };
         let has_accounts = self.ai_accounts.for_agent(agent_id).next().is_some();
         let this = cx.entity().downgrade();
+        let workspace = self.workspace.clone();
 
         PopoverMenu::new("ai-account-menu")
             .menu(move |window, cx| {
@@ -1234,6 +1237,10 @@ impl TitleBar {
                     })
                     .ok()?;
                 let active_id = active_account.as_ref().map(|account| account.id.clone());
+                // Cloned per invocation: the menu builder below is a `move` closure, and the
+                // outer closure is `Fn` — it is called every time the menu is opened, so it
+                // cannot give its captured handle away.
+                let workspace = workspace.clone();
 
                 Some(ContextMenu::build(window, cx, move |mut menu, _, _| {
                     if accounts.is_empty() {
@@ -1321,6 +1328,30 @@ impl TitleBar {
                             }),
                         );
                     }
+
+                    menu = menu.item(
+                        ContextMenuEntry::new("Add account…")
+                            .icon(IconName::Plus)
+                            .handler({
+                                let workspace = workspace.clone();
+                                move |window, cx| {
+                                    let Some(workspace_entity) = workspace.upgrade() else {
+                                        return;
+                                    };
+                                    workspace_entity.update(cx, |workspace, cx| {
+                                        let workspace_handle = cx.entity().downgrade();
+                                        workspace.toggle_modal(window, cx, |window, cx| {
+                                            AddAiAccountModal::new(
+                                                &CLAUDE_CODE_DESCRIPTOR,
+                                                workspace_handle,
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    });
+                                }
+                            }),
+                    );
 
                     menu.entry("Import from cc-switch", None, |_, cx| {
                         match ai_accounts::import_from_cc_switch() {

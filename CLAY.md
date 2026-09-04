@@ -191,12 +191,33 @@ The account rows therefore use `ContextMenuItem::custom_entry` and lay themselve
 — brand mark, name, spacer, tick. That also leaves shared `ui` code untouched, which matters more
 here than the convenience: merge friction is this project's dominant long-term cost.
 
+### The add-account flow
+
+"Add account…" opens `AddAiAccountModal` (`crates/title_bar/src/ai_account_modal.rs`): a name
+field, then `create_account` makes the config directory, the account becomes active, and a
+terminal tab runs `claude /login` with `CLAUDE_CONFIG_DIR` pointed at it.
+
+**A terminal rather than an in-thread `/login`,** which is what `LoginFlow::InThread` implies.
+The agent-panel route needs an ACP thread bound to the account before it can send anything, and
+a terminal is both simpler and closer to what a user would do by hand — which makes a
+misbehaving login far easier to diagnose. It also prints which account it signed in as, which is
+the only confirmation available.
+
+Reached through `Workspace::spawn_in_terminal`, so `title_bar` depends on `task` rather than on
+`terminal_view`. The descriptor's `scrub_env` keys are removed from the spawn environment too: an
+ambient API key would let the CLI skip the subscription login entirely, leaving an account that
+looks signed in but holds no credentials of its own.
+
 ### What the picker does not do yet
 
 - **Claude Code only.** The menu is hardcoded to `CLAUDE_CODE_DESCRIPTOR`; Gemini and Codex
-  accounts exist in the store, with brand icons ready, but have no UI.
-- **No add-account flow.** Accounts can be imported and switched between, but creating one means
-  going through `create_account` plus the agent's `LoginFlow` — not yet wired to a button.
+  accounts exist in the store, with brand icons ready, but have no UI. Their login flows differ
+  (`EmbeddedTerminal` for Codex, `ApiKey` for Gemini), so the modal needs to branch on
+  `LoginFlow` before it can serve them.
+- **No rename or delete.** `delete_account` exists in the store and is unused.
+- **Sets the global default, not the workspace binding.** `AiAccountsSettings.bindings` is read
+  at spawn time and takes precedence, but nothing writes it, so a per-workspace override has to
+  be typed into settings by hand.
 - **Sets the global default, not the workspace binding.** `AiAccountsSettings.bindings` is read
   at spawn time and takes precedence, but nothing writes it yet, so a per-workspace override has
   to be typed into settings by hand.
