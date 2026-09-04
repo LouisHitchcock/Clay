@@ -639,6 +639,30 @@ waiting for a writable event that a `notify` wake does not carry.
 Worth remembering as the shape of the risk here: the loop looked correct, compiled, and half
 worked. Reading the reference implementation closely is what explained it.
 
+### A stale session should not strand the user (fixed 2026-09-04)
+
+Opening an agent thread failed with a raw protocol error:
+
+```
+Resource not found: a264bc53-4341-48b3-9167-44f25405b7e8: { "uri": "..." }
+```
+
+The agent panel persists a `last_active_thread` in `scoped_kv_store` under namespace
+`agent_panel`, and restores it by **resuming that ACP session**. When the agent has no record of
+the session, it answers `resource_not_found` and the panel surfaced that verbatim, leaving no way
+forward.
+
+`ConversationView` now falls back to `new_session` when a resume fails with
+`ErrorCode::ResourceNotFound`, logging that it did. An agent forgetting a session is the normal
+end of that session's life — Claude Code's do not live forever — so it is not a fault worth
+showing.
+
+**How it arose is worth recording as a caution:** testing the follow-up scheduler against
+Louis's real profile created throwaway agent threads, one of which became `last_active_thread`
+and then stopped existing, leaving a dangling pointer. Scratch data written into a live profile
+outlives the test. The stale pointer and the junk "Missing Conversation Context" thread were
+cleared, with both databases backed up as `*.bak-<timestamp>` first.
+
 ### What is left in M7
 
 1. **Consume the marks.** The loop scans for them but is wired with `None`, so nothing yet uses

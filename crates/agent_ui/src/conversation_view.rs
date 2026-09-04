@@ -646,6 +646,13 @@ pub struct ConversationView {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Whether an error means the agent has no record of the session we asked it to resume.
+fn is_unknown_session(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<acp::Error>()
+        .is_some_and(|error| error.code == acp::ErrorCode::ResourceNotFound)
+}
+
 impl ConversationView {
     pub fn has_auth_methods(&self) -> bool {
         self.as_connected().map_or(false, |connected| {
@@ -1147,6 +1154,8 @@ impl ConversationView {
             );
 
             let mut resumed_without_history = false;
+            // Kept because a failed resume falls back to starting fresh, which needs them again.
+            let fallback_work_dirs = session_work_dirs.clone();
             let result = if let Some(session_id) = resume_session_id.clone() {
                 cx.update(|_, cx| {
                     if connection.supports_load_session() {
@@ -1198,6 +1207,28 @@ impl ConversationView {
                     Err(err) => Err(err),
                 },
                 Ok(thread) => Ok(thread),
+            };
+
+            // An agent that has forgotten the session is the normal end of a session's life, not
+            // a fault: Claude Code's do not live forever, and a stale pointer left by an
+            // interrupted run has the same effect. Surfacing the raw protocol error stranded the
+            // user with "Resource not found: <uuid>" and no way forward, so start a fresh thread
+            // instead and note it in the log.
+            let result = match result {
+                Err(error) if resume_session_id.is_some() && is_unknown_session(&error) => {
+                    log::info!(
+                        "agent no longer knows the session being resumed; starting a new thread"
+                    );
+                    match cx.update(|_, cx| {
+                        connection
+                            .clone()
+                            .new_session(project.clone(), fallback_work_dirs, cx)
+                    }) {
+                        Ok(task) => task.await,
+                        Err(_) => return,
+                    }
+                }
+                other => other,
             };
 
             this.update_in(cx, |this, window, cx| {
