@@ -418,9 +418,49 @@ failure falls back to a whole window instead of dropping the resume.
 
 ## M7 — Unified AI terminal
 
-Design already recorded under "Scope: what Clay adds" below, unchanged: one block timeline, three
-block kinds (shell command bounded by OSC 133 marks, agent turn, in-process app command), with
-the **agent as the default input and `!` as the explicit shell escape**.
+Design recorded under "Scope: what Clay adds" below: one block timeline, three block kinds
+(shell command, agent turn, in-process app command), with the **agent as the default input and
+`!` as the explicit shell escape**.
+
+### Blocker found before starting: OSC 133 is not observable (surveyed 2026-09-04)
+
+The recorded design says shell blocks are "bounded by OSC 133 marks". They cannot be, as things
+stand:
+
+- **Clay's terminal has no OSC 133 support.** The only marker in `crates/terminal` is
+  `init_command_startup_marker`, a one-off text sentinel for detecting that an init command
+  finished. There are no command boundaries, no exit codes, no captured output — matching the
+  original survey's note that the terminal "has no concept of a command".
+- **The cwd comes from the OS process table** (`pty_info::PtyProcessInfo`), not from OSC 7, so
+  there is no existing OSC-handling path to extend.
+- **Unknown OSC sequences are dropped before Clay can see them.** `vte 0.15` — a plain
+  crates.io dependency — dispatches OSC in `osc_dispatch`, and anything it does not recognise
+  goes to a local `unhandled()` that only logs. Its `Handler` trait has no catch-all.
+- **Clay never sees the raw PTY bytes for a real terminal.**
+  `alacritty_terminal::event_loop::EventLoop` owns the PTY read and advances the parser on its
+  own IO thread; `crates/terminal/src/alacritty.rs::spawn_event_loop` just constructs it. Only
+  `Terminal::write_output`, used for display-only terminals, passes bytes through Clay's code.
+
+So OSC 133 requires either patching an external crate or taking over the read loop. Worth
+knowing: Clay **already** depends on an external terminal fork (`zed-industries/alacritty`, rev
+`4c129667`), so the in-tree GPUI policy does not directly apply — but forking it again would put
+a second repository in the maintenance path.
+
+### The three real options
+
+1. **An in-tree event loop that tees the bytes.** Replace `EventLoop` with our own read loop that
+   scans for OSC 133 and then calls `processor.advance(&mut term, bytes)` — which is exactly what
+   `write_output` already does. Keeps the recorded design and adds no fork; `spawn_event_loop` is
+   already the seam. The cost is reimplementing alacritty's loop, which also handles the write
+   queue, EOF and drain-on-exit, resize and hangup. Getting it wrong breaks the terminal.
+2. **A task per command.** No shell integration at all: each `!` command runs as its own process
+   with captured output, so argv, cwd, exit code and timing come for free — every field the block
+   model wants. The cost is that shell state does not persist between blocks, so `!cd foo`
+   followed by `!ls` would not be in `foo`, and interactive programs still need the PTY path.
+3. **Text sentinels.** A shell hook prints a unique marker carrying the exit code, detected by
+   scanning terminal content the way `detect_init_command_startup_marker` already does. No fork
+   and no new loop, but markers can leak into visible output and need filtering, and the approach
+   is fragile with programs that redraw the screen.
 
 ## M8 — Rest of the Lathe port
 
