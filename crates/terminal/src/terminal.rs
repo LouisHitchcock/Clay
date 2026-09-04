@@ -1,6 +1,7 @@
 mod mappings;
 
 mod alacritty;
+pub mod osc133;
 mod pty_info;
 pub mod terminal_settings;
 

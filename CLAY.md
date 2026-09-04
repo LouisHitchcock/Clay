@@ -581,13 +581,46 @@ what putting shell commands in the agent's own timeline buys. Nothing needs push
 input at all. `ShellBlock::failure_context` remains in `ai_terminal` and tested, but is no longer
 called from here.
 
+### Shell integration: the OSC 133 scanner is done
+
+`crates/terminal/src/osc133.rs` reads shell-integration marks out of a byte stream: prompt
+start (`A`), command start (`B`), output start (`C`) and command finished with an exit code
+(`D`). 9 tests.
+
+**Stateful by necessity.** A PTY read can split a sequence anywhere, and a 4 KiB boundary
+falling between the `133` and the `;` would otherwise lose a `D` mark — leaving a command that
+never appears to finish. Tested by feeding a sequence one or two bytes at a time.
+
+It also refuses to be wedged: an overlong payload (a large clipboard OSC, say) is discarded
+rather than buffered, but the scan continues so the terminator still returns to text and later
+marks still arrive.
+
+It **scans a copy** rather than parsing, and does not modify or consume the bytes — callers pass
+the same slice to `vte` as before. That is what keeps this in-tree: the marks are a side channel
+alongside the real parser rather than a replacement for it.
+
+### The remaining piece: an in-tree read loop
+
+Survey findings that make it viable:
+
+- **`EventedPty` and `EventedReadWrite` are public traits**, and `tty::Pty` is public, so
+  alacritty's PTY layer can be reused entirely — only the loop needs replacing. Clay already
+  calls `tty::new` itself in `alacritty.rs::open_pty`.
+- **`polling` 3.11.0 is already in the lockfile**, resolved from alacritty's `polling = "3.8.0"`.
+  Adding it to the workspace unifies to the same crate, so the `Arc<Poller>` in the trait
+  signature will match rather than being a different type with the same name.
+- Alacritty's own `pty_read` already takes an optional `writer` to tee bytes for ref tests, which
+  confirms the seam is in the right place — it is simply not exposed.
+
+What the loop must still do beyond reading: the write queue, child-exit and drain-on-exit, resize,
+and providing an equivalent of `Notifier` for the `PtySender` Clay hands back.
+
 ### What is left in M7
 
-1. **The in-tree event loop** — the chosen route to real shell integration, and the riskiest
-   piece. Build it behind the existing `spawn_event_loop` seam so the current path stays
-   switchable. Note that what exists now runs each `!` command as its own process, so shell state
-   does not persist between blocks: `!cd foo` then `!ls` will not be in `foo`. That is precisely
-   what the event loop fixes, and it is the biggest remaining gap against Warp.
+1. **The in-tree read loop**, per above. Build it behind the existing `spawn_event_loop` seam so
+   the current path stays switchable. Note that what exists now runs each `!` command as its own
+   process, so shell state does not persist between blocks: `!cd foo` then `!ls` will not be in
+   `foo`. That is precisely what this fixes, and it is the biggest remaining gap against Warp.
 2. **App commands** — project and workspace navigation, settings, session control. `/` already
    routes; nothing consumes it yet.
 3. **Warp parity items not yet started**: rerunning a block, copying a block's output, and
