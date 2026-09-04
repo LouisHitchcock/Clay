@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use settings::{RegisterSetting, Settings, SettingsContent};
 use std::path::{Path, PathBuf};
 
+pub mod limit_message;
+pub mod policy;
+pub mod usage;
+pub use limit_message::{looks_like_usage_limit, parse_reset_time};
+pub use policy::{DEFAULT_HEADROOM_THRESHOLD, LimitResponse, accounts_with_usage, choose_after_limit};
+pub use usage::{AccountUsage, SESSION_WINDOW, read_usage};
+
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountState {
@@ -17,7 +24,7 @@ pub enum AccountState {
     Expired,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AiAccount {
     pub id: String,
     pub agent_id: String,

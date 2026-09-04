@@ -259,10 +259,76 @@ Requirements as stated:
 - **Fully automatic by default** — no user input at the moment of reset.
 - **A manual option too**, so the user can drive it for their own automation.
 
-Not yet designed. Open questions: how the reset time is discovered (parsed from an API error,
-read from a response header, or computed from a known window); whether the follow-up is a stored
-prompt replayed into the same thread or a fresh turn; and how it interacts with M5, since
-switching accounts is the other obvious response to hitting a limit.
+### Decided design
+
+When a turn dies on a usage limit, Clay should either **move to another account and carry on**,
+or **wait for the soonest reset and resume**, and in both cases continue **the same thread**.
+
+**1. Scheduler core.** Persist a pending follow-up — thread, prompt, fire time — wake at that
+time and re-send. Everything else plugs into this, and it is also the manual entry point
+("send this at 15:00"), so the part the user drives directly is the part that cannot break.
+Persistence matters because a five-hour window outlives most app sessions.
+
+**2. Reset time from the limit message.** Claude Code reports limits as text —
+"limit hit, resets at xx:yy" — so the reset time is parsed out of it. ACP has no structured
+signal for this: `StopReason` is only `EndTurn`, `MaxTokens`, `MaxTurnRequests`, `Refusal` and
+`Cancelled`. Parsing a human-readable message is brittle across CLI releases, so a parse failure
+must fall back to a default window rather than silently dropping the follow-up. **The exact
+wording still needs confirming against a real limit message.**
+
+**3. Account selection.** Switching is preferred over waiting, but not blindly: moving onto an
+account that is nearly exhausted just moves the problem. So, on hitting a limit:
+
+- consider the other accounts for the agent;
+- **skip any whose five-hour window is ≥80% consumed**;
+- if one qualifies, switch to it and continue immediately;
+- otherwise schedule the follow-up, on **the account whose window resets soonest**.
+
+### Usage is readable, which is what makes the 80% rule possible
+
+Claude Code writes `usage-history.jsonl` into its config directory: one JSON object per line,
+`{ts, session, weekly}`, sampled about once a minute. `session` is the five-hour window and
+`weekly` the weekly allowance, both **fractions from 0.0 to 1.0** — verified against real data,
+where `session` reaches 1.0 and `weekly` peaked at 0.29.
+
+Because each account is its own `CLAUDE_CONFIG_DIR`, each gets its own file, so usage is
+genuinely per-account. Two consequences to handle:
+
+- **A stale sample can only overstate usage.** The file is only written while that account is
+  actually running, so an idle account's last sample is old — but usage cannot rise while idle,
+  and a sample older than the five-hour window means the window has rolled and usage is
+  effectively zero. Using the last sample is therefore safe in the cautious direction: it may
+  refuse a switch that would have been fine, never the reverse.
+- **A freshly imported account has no file at all**, since only credentials are copied. Unknown
+  usage is treated as usable, and the decision self-corrects: if the switched-to account reports
+  a limit straight away, that falls back to scheduling.
+
+### Build order
+
+1. **Usage reader — done.** `ai_accounts::usage` reads the newest sample from an account's
+   `usage-history.jsonl`, scanning from the end because the file grows to thousands of lines. A
+   partial final line — the file is appended to by a running process — is skipped rather than
+   treated as failure, and a missing file is `Unknown` rather than an error: usage is an
+   optimisation for choosing between accounts, and failing to read it must never be what stops a
+   turn from continuing.
+2. **Selection policy — done.** `ai_accounts::policy::choose_after_limit` returns `Switch` or
+   `Wait`. Known headroom beats unknown usage, least-used first; the exhausted account is never
+   a switch target even if its own sample disagrees, because the agent has just said otherwise.
+   When nothing has headroom it waits on the soonest reset, preferring the time the agent
+   *stated* over anything inferred from a sample.
+3. **Limit-message parser — done.** `ai_accounts::limit_message` handles an appended Unix
+   timestamp (`...limit reached|1750000000`) and clock times (`3pm`, `3:30pm`, `15:00`),
+   resolving a bare time to its next occurrence. Anchored on the word "reset" so an unrelated
+   time earlier in the message is not mistaken for one, and it rejects a timestamp in the past so
+   a replayed message cannot schedule a resume that fires instantly. `looks_like_usage_limit` is
+   separate from parsing, because a limit with an unreadable time is still a limit.
+4. **Scheduler core — next.** Persisted follow-ups, wake-up, re-send into the same thread, and
+   the manual entry point.
+
+62 tests cover the three finished pieces. Two shortcomings are deliberate and documented in the
+code: a named zone in the message is read in the local offset rather than mapped, and the exact
+wording is **still unverified against a real limit message** — which is exactly why a parse
+failure falls back to a whole window instead of dropping the resume.
 
 ## M7 — Unified AI terminal
 
