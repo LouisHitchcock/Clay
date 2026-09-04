@@ -615,12 +615,39 @@ Survey findings that make it viable:
 What the loop must still do beyond reading: the write queue, child-exit and drain-on-exit, resize,
 and providing an equivalent of `Notifier` for the `PtySender` Clay hands back.
 
+### The in-tree read loop — working (2026-09-04)
+
+`crates/terminal/src/clay_event_loop.rs` replaces alacritty's `EventLoop`, reusing its PTY
+entirely and teeing every byte through the scanner on the way to the parser. Verified with a real
+terminal: PowerShell starts, `echo` round-trips, and `cd crates; pwd` moves the prompt to
+`...\Clay\crates>` — shell state persists, which is the whole point of the PTY path.
+
+`PtySender` became an enum so **alacritty's loop stays reachable**: set `CLAY_LEGACY_PTY_LOOP=1`
+to fall back without a rebuild. For machinery this central, an escape hatch is worth an enum.
+
+#### The bug that only testing would have found
+
+The first version read fine — banner and prompt rendered — but **nothing typed reached the
+shell**. `Poller::notify()` wakes `wait` with *no events*, so the `events.is_empty()` branch ran
+and `continue`d before draining the channel. Every keystroke queued and was never read.
+
+Alacritty guards this with `events.is_empty() && self.rx.peek().is_none()`, which is exactly the
+condition I had dropped — and the reason it uses a `PeekableReceiver` at all. The channel is now
+drained *before* the emptiness check, and a queued write is attempted directly rather than
+waiting for a writable event that a `notify` wake does not carry.
+
+Worth remembering as the shape of the risk here: the loop looked correct, compiled, and half
+worked. Reading the reference implementation closely is what explained it.
+
 ### What is left in M7
 
-1. **The in-tree read loop**, per above. Build it behind the existing `spawn_event_loop` seam so
-   the current path stays switchable. Note that what exists now runs each `!` command as its own
-   process, so shell state does not persist between blocks: `!cd foo` then `!ls` will not be in
-   `foo`. That is precisely what this fixes, and it is the biggest remaining gap against Warp.
+1. **Consume the marks.** The loop scans for them but is wired with `None`, so nothing yet uses
+   the boundaries it finds. Next step: route them to the terminal so `!` commands become blocks
+   with real exit codes from the live shell, rather than one process per command.
+2. **Shell hooks.** Nothing emits OSC 133 yet — PowerShell, bash and zsh each need a prompt hook
+   installed for the marks to exist at all. The scanner and loop are ready for them.
+3. **App commands** — project and workspace navigation, settings, session control.
+4. **Warp parity**: rerunning a block, copying its output, keyboard navigation between blocks.
 2. **App commands** — project and workspace navigation, settings, session control. `/` already
    routes; nothing consumes it yet.
 3. **Warp parity items not yet started**: rerunning a block, copying a block's output, and

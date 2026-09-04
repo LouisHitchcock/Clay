@@ -1,6 +1,8 @@
 mod mappings;
 
 mod alacritty;
+#[cfg(target_os = "windows")]
+mod clay_event_loop;
 pub mod osc133;
 mod pty_info;
 pub mod terminal_settings;

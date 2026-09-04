@@ -82,28 +82,62 @@ impl From<&AlacrittyPty> for ProcessIdGetter {
     }
 }
 
-pub(super) struct PtySender {
-    notifier: Notifier,
+/// How the terminal talks to whichever PTY loop is running.
+///
+/// Two variants rather than one, so alacritty's loop stays reachable: Clay's is a
+/// reimplementation of a delicate piece of machinery, and being able to fall back without a
+/// rebuild is worth an enum.
+pub(super) enum PtySender {
+    Alacritty(Notifier),
+    #[cfg(target_os = "windows")]
+    Clay(crate::clay_event_loop::LoopSender),
 }
 
 impl PtySender {
     pub(super) fn notify(&self, input: impl Into<Cow<'static, [u8]>>) {
-        self.notifier.notify(input);
+        match self {
+            Self::Alacritty(notifier) => notifier.notify(input),
+            #[cfg(target_os = "windows")]
+            Self::Clay(sender) => {
+                if let Err(error) =
+                    sender.send(crate::clay_event_loop::LoopMsg::Input(input.into()))
+                {
+                    log::error!("failed to write to the pty: {error}");
+                }
+            }
+        }
     }
 
     pub(super) fn resize(&self, bounds: TerminalBounds) {
-        if let Err(error) = self
-            .notifier
-            .0
-            .send(Msg::Resize(window_size_from_terminal_bounds(bounds)))
-        {
-            log::error!("failed to resize alacritty pty: {error}");
+        let size = window_size_from_terminal_bounds(bounds);
+        match self {
+            Self::Alacritty(notifier) => {
+                if let Err(error) = notifier.0.send(Msg::Resize(size)) {
+                    log::error!("failed to resize alacritty pty: {error}");
+                }
+            }
+            #[cfg(target_os = "windows")]
+            Self::Clay(sender) => {
+                if let Err(error) = sender.send(crate::clay_event_loop::LoopMsg::Resize(size)) {
+                    log::error!("failed to resize the pty: {error}");
+                }
+            }
         }
     }
 
     pub(super) fn shutdown(&self) {
-        if let Err(error) = self.notifier.0.send(Msg::Shutdown) {
-            log::debug!("failed to shut down alacritty pty loop: {error}");
+        match self {
+            Self::Alacritty(notifier) => {
+                if let Err(error) = notifier.0.send(Msg::Shutdown) {
+                    log::debug!("failed to shut down alacritty pty loop: {error}");
+                }
+            }
+            #[cfg(target_os = "windows")]
+            Self::Clay(sender) => {
+                if let Err(error) = sender.send(crate::clay_event_loop::LoopMsg::Shutdown) {
+                    log::debug!("failed to shut down the pty loop: {error}");
+                }
+            }
         }
     }
 }
@@ -206,14 +240,30 @@ pub(super) fn spawn_event_loop(
     pty: AlacrittyPty,
     drain_on_exit: bool,
 ) -> Result<PtySender> {
+    // Clay's loop exists to see OSC 133; alacritty's cannot expose it. Set
+    // CLAY_LEGACY_PTY_LOOP=1 to go back to alacritty's if the terminal misbehaves, which is a
+    // cheaper escape hatch than a rebuild for machinery this central.
+    #[cfg(target_os = "windows")]
+    if std::env::var("CLAY_LEGACY_PTY_LOOP").as_deref() != Ok("1") {
+        let sender = crate::clay_event_loop::spawn(
+            term,
+            ZedListener(events_tx),
+            pty,
+            drain_on_exit,
+            // Marks are read but not yet consumed: the loop lands first so it can be exercised
+            // on its own, before anything depends on the boundaries it finds.
+            None,
+        )
+        .context("failed to start Clay's pty loop")?;
+        return Ok(PtySender::Clay(sender));
+    }
+
     let event_loop = EventLoop::new(term, ZedListener(events_tx), pty, drain_on_exit, false)
         .context("failed to create event loop")?;
     let pty_tx = event_loop.channel();
     let _io_thread = event_loop.spawn();
 
-    Ok(PtySender {
-        notifier: Notifier(pty_tx),
-    })
+    Ok(PtySender::Alacritty(Notifier(pty_tx)))
 }
 
 pub(super) fn resize(term: &mut AlacrittyTerm, bounds: TerminalBounds) {

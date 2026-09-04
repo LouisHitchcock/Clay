@@ -744,6 +744,7 @@ open = "5.0.0"
 ordered-float = "2.1.1"
 palette = { version = "0.7.5", default-features = false, features = ["std"] }
 parking_lot = "0.12.1"
+polling = "3"
 parse_int = "0.9"
 partial-json-fixer = "0.5.3"
 pathfinder_geometry = "0.5"
