@@ -769,7 +769,6 @@ fn main() {
         vim::init(cx);
         terminal_view::init(cx);
         browser::init(cx);
-        ai_terminal::init(cx);
         journal::init(app_state.clone(), cx);
         encoding_selector::init(cx);
         language_selector::init(cx);

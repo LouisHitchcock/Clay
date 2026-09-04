@@ -638,10 +638,6 @@ name = "ai_terminal"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "editor",
- "gpui",
- "ui",
- "workspace",
 ]
 
 [[package]]
@@ -23017,7 +23013,6 @@ dependencies = [
  "agent_settings",
  "agent_skills",
  "agent_ui",
- "ai_terminal",
  "anyhow",
  "ashpd",
  "askpass",

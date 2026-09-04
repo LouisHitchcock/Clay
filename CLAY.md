@@ -520,34 +520,43 @@ results belong in the same history. Two decisions worth keeping:
   so a success cannot be narrated as one, and it truncates from the *end* because a failing
   command's last lines carry the error while its first are progress noise.
 
-**The pane item — done** (`view.rs`). `ai_terminal: open ai terminal` opens a tab with the
-timeline above and an editor below. Verified on screen: `git status` becomes an agent block,
-`!ls -la` a shell block, `/help` a command block, each with its own icon.
+### A wrong turn: a separate pane item (built and removed, 2026-09-04)
 
-The input is an **editor, not a shell prompt**, which is what makes agent-first work at all — the
-shell never sees a keystroke until a `!` line is submitted, so there is no readline competing for
-the same keys. Enter submits and alt-Enter inserts a newline, following the binding pattern the
-agent's own message editor already uses (`AiTerminal > Editor` context).
+The first attempt gave the terminal **its own tab**, with its own timeline and its own input.
+That was a straight misreading of the phase plan, which says "merge the agent timeline into the
+block timeline" — a separate surface *duplicates* the agent chat rather than unifying with it,
+and would have left the user with two places to talk to the same agent.
 
-Two things worth remembering from building it:
+Removed. What survives is the part that was right: the routing and the block model, which are
+independent of where they are rendered.
 
-- `Focusable::focus_handle` must return the **input's** handle, not the container's. Returning the
-  container's meant activating the tab focused nothing and typing went nowhere.
-- The shell hint renders under the input and is driven by `looks_like_shell_command`, but the
-  submit path never consults it. Typing `git status` shows "prefix with ! to run it" and still
-  goes to the agent, which is the behaviour the design requires.
+### The correction: `!` becomes an entry in the agent's own thread
 
-Agent and shell blocks currently say plainly that they are waiting on the agent connection and on
-shell integration. That is deliberate over a stub that pretends to work: the routing and the
-timeline are real, the two backends are the next pieces.
+`AcpThread::upsert_tool_call` is public, and the thread view already renders a tool call as a
+block with its command, output and status. So a `!` command does not need a parallel timeline at
+all — it can be inserted into the conversation as a tool-call entry, run, then updated with its
+output and exit status.
+
+That is the design's "merge the agent timeline into the block timeline", taken literally: the
+shell command *becomes* an entry in the agent's timeline. It also fits the recorded intent that
+an agent turn is "Zed's agent + `terminal_tool`", and it needs no change to `acp_thread`'s entry
+model and no second list to keep in sync.
+
+The interception point is `ThreadView::send` in
+`crates/agent_ui/src/conversation_view/thread_view.rs`, which is the single path every submitted
+message takes.
 
 ### What is left in M7
 
-1. **The in-tree event loop** — the chosen route to shell integration, and the riskiest piece.
+1. **Route `!` at `ThreadView::send`** and insert the shell command as a tool-call entry in the
+   thread, rather than sending it to the model.
+2. **The in-tree event loop** — the chosen route to shell integration, and the riskiest piece.
    Build it behind the existing `spawn_event_loop` seam so the current path stays switchable.
-2. **Wiring agent blocks to a real thread**, so a bare line actually runs a turn.
-3. **App commands beyond `/clear`** — project and workspace navigation, settings, session
-   control. `/help` currently reports itself unknown, which is honest but unhelpful.
+3. **App commands** — project and workspace navigation, settings, session control.
+
+Worth keeping from the discarded surface: `Focusable::focus_handle` must return the *input's*
+handle, not the container's. Returning the container's meant activating the view focused nothing
+and typing went nowhere, which looks correct and fails silently.
 
 ## M8 — Rest of the Lathe port
 
