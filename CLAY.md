@@ -546,13 +546,43 @@ The interception point is `ThreadView::send` in
 `crates/agent_ui/src/conversation_view/thread_view.rs`, which is the single path every submitted
 message takes.
 
+### `!` in the agent thread — working (2026-09-04)
+
+`ThreadView::send` routes a `!` line to `run_shell_command` instead of the model. It inserts an
+`acp::ToolCall` with `ToolKind::Execute`, runs the command through `ShellBuilder` with the
+project root as cwd, then updates the entry with the output and a Completed or Failed status.
+
+Verified on screen: `!echo hello from clay` and `!definitelynotacommand` both appear as
+**Run Command** blocks in the conversation, and the failing one drafted PowerShell's real
+`CommandNotFoundException` text into the message editor.
+
+Decisions worth keeping:
+
+- **Commands are built through `gpui_util::new_std_command`**, then handed to smol. On Windows
+  that sets `CREATE_NO_WINDOW`, without which every `!` command flashes a console window over
+  the editor.
+- **stdout and stderr are joined**, in the order a terminal would have shown them, because a
+  block is meant to show what the command printed rather than two separate streams.
+- **Failure context goes into the editor only when it is empty.** It is offered as a draft to
+  send, not forced — clobbering something half-typed would be a poor trade, and the block shows
+  the failure regardless. `MessageEditor::set_text` is test-only, so this uses `insert_text`,
+  which suits the rule anyway.
+
+Known rough edge: **tool-call output is collapsed by default.** `is_open` comes from
+`entry_view_state.is_tool_call_expanded`, so a shell block shows its command with the output one
+click away. For a `!` command the output is the whole point, so expanding these by default is the
+obvious next polish.
+
 ### What is left in M7
 
-1. **Route `!` at `ThreadView::send`** and insert the shell command as a tool-call entry in the
-   thread, rather than sending it to the model.
-2. **The in-tree event loop** — the chosen route to shell integration, and the riskiest piece.
-   Build it behind the existing `spawn_event_loop` seam so the current path stays switchable.
-3. **App commands** — project and workspace navigation, settings, session control.
+1. **Expand shell blocks by default**, per above.
+2. **The in-tree event loop** — the chosen route to real shell integration, and the riskiest
+   piece. Build it behind the existing `spawn_event_loop` seam so the current path stays
+   switchable. Note that what exists now runs each `!` command as its own process, so shell state
+   does not persist between blocks: `!cd foo` then `!ls` will not be in `foo`. That is precisely
+   what the event loop fixes.
+3. **App commands** — project and workspace navigation, settings, session control. `/` already
+   routes; nothing consumes it yet.
 
 Worth keeping from the discarded surface: `Focusable::focus_handle` must return the *input's*
 handle, not the container's. Returning the container's meant activating the view focused nothing

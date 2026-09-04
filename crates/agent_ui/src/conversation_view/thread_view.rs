@@ -1486,6 +1486,19 @@ impl ThreadView {
 
         let message_editor = self.message_editor.clone();
 
+        // A `!` line is the explicit shell escape: it never reaches the model. It is run here
+        // and recorded as a tool call in this same thread, so the shell and the agent share one
+        // timeline rather than living in separate surfaces.
+        if let ai_terminal::Route::Shell(command) =
+            ai_terminal::route(&message_editor.read(cx).text(cx))
+        {
+            message_editor.update(cx, |message_editor, cx| {
+                message_editor.clear(window, cx);
+            });
+            self.run_shell_command(command, window, cx);
+            return;
+        }
+
         let is_editor_empty = message_editor.read(cx).is_empty(cx);
         let is_generating = thread.read(cx).status() != ThreadStatus::Idle;
 
@@ -1611,6 +1624,108 @@ impl ThreadView {
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+    }
+
+    /// Runs a `!` command and records it in the thread as a tool call.
+    ///
+    /// Uses `upsert_tool_call` rather than a timeline of our own: the thread already renders a
+    /// tool call as a block with its command, output and status, so the shell command simply
+    /// becomes an entry in the agent's history — which is what makes the timeline unified rather
+    /// than merely adjacent.
+    fn run_shell_command(&mut self, command: String, window: &mut Window, cx: &mut Context<Self>) {
+        let thread = self.thread.clone();
+        let tool_call_id =
+            acp::ToolCallId::new(format!("clay-shell-{}", uuid::Uuid::new_v4()));
+
+        // The project root, so `!ls` means what the user expects rather than listing wherever
+        // the editor happened to be launched from.
+        let cwd = self
+            .workspace
+            .read_with(cx, |workspace, cx| {
+                workspace
+                    .project()
+                    .read(cx)
+                    .visible_worktrees(cx)
+                    .next()
+                    .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+            })
+            .ok()
+            .flatten();
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::ToolCall(
+                        acp::ToolCall::new(tool_call_id.clone(), command.clone())
+                            .kind(acp::ToolKind::Execute)
+                            .status(acp::ToolCallStatus::InProgress),
+                    ),
+                    cx,
+                )
+                .log_err();
+        });
+
+        let spawn_command = command.clone();
+        let spawn_cwd = cwd.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let finished = cx
+                .background_spawn(async move { run_shell(&spawn_command, spawn_cwd.as_deref()).await })
+                .await;
+
+            let (status, body) = match &finished {
+                Ok(block) => (
+                    if block.succeeded() == Some(true) {
+                        acp::ToolCallStatus::Completed
+                    } else {
+                        acp::ToolCallStatus::Failed
+                    },
+                    match block.exit_code {
+                        Some(0) | None => block.output.clone(),
+                        Some(code) => format!("exit {code}\n{}", block.output),
+                    },
+                ),
+                Err(error) => (acp::ToolCallStatus::Failed, format!("{error:#}")),
+            };
+
+            thread
+                .update(cx, |thread, cx| {
+                    thread
+                        .handle_session_update(
+                            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                                tool_call_id,
+                                acp::ToolCallUpdateFields::new().status(status).content(vec![
+                                    acp::ToolCallContent::from(acp::ContentBlock::Text(
+                                        acp::TextContent::new(body),
+                                    )),
+                                ]),
+                            )),
+                            cx,
+                        )
+                        .log_err();
+                });
+
+            // A failure is not a dead end: the command, its directory, exit code and output go
+            // to the agent so it can suggest a correction, rather than leaving the user to copy
+            // the error out and explain it.
+            if let Ok(block) = finished
+                && let Some(context) = block.failure_context(SHELL_FAILURE_CONTEXT_BYTES)
+            {
+                this.update_in(cx, |this, window, cx| {
+                    let message_editor = this.message_editor.clone();
+                    // Only into an empty editor. The context is offered as a draft to send, not
+                    // forced: clobbering something the user was part-way through typing would be
+                    // a poor trade for a convenience, and the tool-call block already shows the
+                    // failure either way.
+                    if message_editor.read(cx).is_empty(cx) {
+                        message_editor.update(cx, |message_editor, cx| {
+                            message_editor.insert_text(&context, window, cx);
+                        });
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     pub fn send_impl(
@@ -12986,4 +13101,47 @@ pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {
             .log_err();
     })
     .detach();
+}
+
+/// How much of a failed command's output to hand the agent.
+///
+/// Enough for a compiler error or a stack trace, short of pasting an entire build log into the
+/// conversation.
+const SHELL_FAILURE_CONTEXT_BYTES: usize = 4096;
+
+/// Runs `command` through the system shell and collects what it did.
+async fn run_shell(
+    command: &str,
+    cwd: Option<&std::path::Path>,
+) -> anyhow::Result<ai_terminal::ShellBlock> {
+    let builder =
+        task::ShellBuilder::new(&task::Shell::System, cfg!(windows)).non_interactive();
+    let (program, args) = builder.build(Some(command.to_string()), &Vec::new());
+
+    // Via `new_std_command` rather than smol directly: on Windows it sets CREATE_NO_WINDOW, so
+    // running a command does not flash a console window over the editor.
+    let mut process = smol::process::Command::from(gpui_util::new_std_command(program));
+    process.args(args);
+    if let Some(cwd) = cwd {
+        process.current_dir(cwd);
+    }
+
+    let output = process.output().await?;
+    // stderr and stdout are joined rather than kept apart: a block shows what the command
+    // printed, in the order a terminal would have shown it.
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&stderr);
+    }
+
+    Ok(ai_terminal::ShellBlock {
+        command: command.to_string(),
+        cwd: cwd.map(|cwd| cwd.to_path_buf()),
+        output: text,
+        exit_code: output.status.code(),
+    })
 }
